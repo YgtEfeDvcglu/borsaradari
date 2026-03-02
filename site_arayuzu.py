@@ -124,7 +124,8 @@ def hisse_verileri_getir(sembol):
 
         try:
             info = hisse.info
-            pddd = info.get('priceToBook', 'Bilinmiyor')
+            # PD/DD için Yahoo'nun kullanabileceği alternatif anahtarları sırayla deniyoruz:
+            pddd = info.get('priceToBook') or info.get('trailingPriceToBook') or info.get('forwardPriceToBook') or 'Bilinmiyor'
             borc = info.get('netDebtToEbitda', 'Bilinmiyor')
         except:
             pddd, borc = 'Bilinmiyor', 'Bilinmiyor'
@@ -661,6 +662,7 @@ st.markdown("""
 </div>
 
 """, unsafe_allow_html=True)
+
 
 
 

@@ -360,12 +360,22 @@ baslat = buton_sutun1.button("▶️ BAŞLAT", use_container_width=True)
 durdur = buton_sutun2.button("🛑 DURDUR", use_container_width=True)
 
 if durdur:
+    # 1. Hafızadaki tüm eski tarama verilerini sil
     if 'eslesenler_hafiza' in st.session_state:
         del st.session_state['eslesenler_hafiza']
     if 'bronz_hafiza' in st.session_state:
         del st.session_state['bronz_hafiza']
-    st.warning("İşlem durduruldu ve arayüz sıfırlandı.")
-    st.stop()
+    if 'hatali_hafiza' in st.session_state:
+        del st.session_state['hatali_hafiza']
+        
+    # 2. Ekrana geçici olarak uyarıyı bas
+    uyari_kutusu = st.empty()
+    uyari_kutusu.warning("🛑 İşlem durduruldu. Hafıza temizlendi, ana ekrana dönülüyor...")
+    
+    # 3. İki saniye bekletip sayfayı otomatik yenile (Ana ekrana atar)
+    import time
+    time.sleep(2)
+    st.rerun()
 
 # --- SİTE KÜNYESİ VE HAKLAR ---
 st.sidebar.markdown("---")
@@ -643,4 +653,5 @@ st.markdown("""
     - Sistemdeki algoritmalar tamamen geçmiş verilere ve matematiksel indikatörlere dayanmaktadır. Geçmiş fiyat hareketleri, gelecekteki hareketleri garanti etmez. Hiçbir veri veya senaryo eşleşmesi <b>Al, Sat veya Tut tavsiyesi içermez.</b><br>
     - Veriler 3. parti sağlayıcılardan (Yahoo Finance vb.) çekilmekte olup <b>genellikle 15 dakika gecikmeli</b> olarak yansıyabilmektedir. Olası veri hatalarından, gecikmelerden, kesintilerden veya bu araca dayanarak alacağınız finansal kararlardan doğabilecek maddi/manevi zararlardan geliştirici (Yiğit Efe Devecioğlu) hiçbir şekilde sorumlu tutulamaz. Lütfen yatırımlarınızı kendi risk profilinize ve araştırmalarınıza göre yapınız.
 </div>
+
 """, unsafe_allow_html=True)

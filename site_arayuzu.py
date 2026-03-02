@@ -320,10 +320,10 @@ def pdf_bellege_uret(df, sembol, temel, son, puan, ema_etiket, vwap_deger, rsi_v
 # BÖLÜM 2: YAN MENÜ (KUMANDA PANELİ)
 # ==============================================================================
 st.sidebar.title("⚙️ Kumanda Paneli")
-mod_secimi = st.sidebar.radio("Tarama Modu", ["Çoklu Hisse Modu", "Tekli Hisse Modu"])
+mod_secimi = st.sidebar.radio("Tarama Modu", ["Çoklu Hisse Tarama", "Tekli Hisse Tarama"])
 
 tekli_sembol = ""
-if mod_secimi == "Çoklu Hisse Modu":
+if mod_secimi == "Çoklu Hisse Tarama":
     toplam_sayi = len(bist_listesi)
     st.sidebar.markdown("---")
     st.sidebar.subheader(f"📏 Arama Aralığı (1-{toplam_sayi})")
@@ -353,7 +353,7 @@ if mod_secimi == "Çoklu Hisse Modu":
         pddd_sinir = st.sidebar.number_input("PD/DD Sınırı (Altında)", value=2.0)
         adx_sinir = st.sidebar.number_input("ADX Sınırı (Üstünde)", value=20.0)
 
-elif mod_secimi == "Tekli Hisse Modu":
+elif mod_secimi == "Tekli Hisse Tarama":
     tekli_sembol = st.sidebar.text_input("Hisse Kodu Girin (Örn: THYAO.IS):", value="THYAO.IS").upper()
 
 st.sidebar.markdown("---")
@@ -657,6 +657,7 @@ st.markdown("""
 </div>
 
 """, unsafe_allow_html=True)
+
 
 
 

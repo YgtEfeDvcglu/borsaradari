@@ -365,7 +365,6 @@ elif mod_secimi == "Tekli Hisse Tarama":
     • <b>Almanya (XETRA):</b> <code>.DE</code> (Örn: VOW3.DE)<br>
     • <b>İngiltere (Londra):</b> <code>.L</code> (Örn: BP.L)<br>
     • <b>Çin (Shanghai):</b> <code>.SS</code> (Örn: 600519.SS)
-    </div>
     • Hong Kong:</b> <code>.HK</code> (Örn: 0700.HK)
     </div>
     """, unsafe_allow_html=True)
@@ -675,6 +674,7 @@ st.markdown("""
 </div>
 
 """, unsafe_allow_html=True)
+
 
 
 

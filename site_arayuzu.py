@@ -356,6 +356,17 @@ if mod_secimi == "Çoklu Hisse Tarama":
 
 elif mod_secimi == "Tekli Hisse Tarama":
     tekli_sembol = st.sidebar.text_input("Hisse Kodu Girin (Örn: THYAO.IS):", value="THYAO.IS").upper()
+    
+    st.sidebar.markdown("""
+    <div style='color: #666; font-size: 13px; margin-top: -10px; margin-bottom: 10px; line-height: 1.4;'>
+    <b>⚠️ Hisse Kodu Uzantıları:</b><br>
+    • <b>Türkiye (BİST):</b> <code>.IS</code> (Örn: THYAO.IS)<br>
+    • <b>ABD Borsaları:</b> Uzantı yok (Örn: AAPL, TSLA)<br>
+    • <b>Almanya (XETRA):</b> <code>.DE</code> (Örn: VOW3.DE)<br>
+    • <b>İngiltere (Londra):</b> <code>.L</code> (Örn: BP.L)<br>
+    • <b>Çin (Shanghai) / Hong Kong:</b> <code>.SS</code> / <code>.HK</code> (Örn: 600519.SS, 0700.HK)
+    </div>
+    """, unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
 buton_sutun1, buton_sutun2 = st.sidebar.columns(2)
@@ -662,6 +673,7 @@ st.markdown("""
 </div>
 
 """, unsafe_allow_html=True)
+
 
 
 

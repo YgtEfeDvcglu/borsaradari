@@ -359,7 +359,7 @@ elif mod_secimi == "Tekli Hisse Tarama":
     
     st.sidebar.markdown("""
     <div style='color: #666; font-size: 13px; margin-top: -10px; margin-bottom: 10px; line-height: 1.4;'>
-    <b>⚠️⚠️Her bir borsada işlem gören hissenin kendi uzantısı vardır. Aratmalarınız sonuç bulması için bu uzantıları **lütfen ekleyiniz**. </b><br>
+    <b>⚠️⚠️İşlem gören her bir hissenin işlem gördüğü borsaya göre bir uzantısı vardır. Aratmalarınız sonuç bulması için bu uzantıları **lütfen ekleyiniz**. </b><br>
     <b>Hisse Kodu Uzantıları:</b><br>
     • <b>Türkiye (BİST):</b> <code>.IS</code> (Örn: THYAO.IS)<br>
     • <b>ABD Borsaları:</b> Uzantı yok (Örn: AAPL, TSLA)<br>
@@ -675,6 +675,7 @@ st.markdown("""
 </div>
 
 """, unsafe_allow_html=True)
+
 
 
 

@@ -410,7 +410,7 @@ if not baslat and not arama_gecmisi_var:
     col1, col2 = st.columns(2)
         
     # 🧠 Akıllı Kutu Mantığı: Manuel seçilirse sadece Tavsiyeler açık kalır, diğerleri kapanır.
-    manuel_mod_aktif = (mod_secimi == "Çoklu Tarama Modu" and strateji == "Manuel Kriterler")
+    manuel_mod_aktif = (mod_secimi == "Çoklu Hisse Tarama" and strateji == "Manuel Kriterler")
     diger_kutular_acik = not manuel_mod_aktif
 
     with col1:
@@ -512,7 +512,7 @@ else:
     
     # EĞER YENİ BİR TARAMA İSTENİYORSA (Sadece butona basıldıysa burası çalışır)
     if baslat:
-        taranacak_liste = bist_listesi[baslangic-1:bitis] if mod_secimi == "Çoklu Tarama Modu" else [tekli_sembol]
+        taranacak_liste = bist_listesi[baslangic-1:bitis] if mod_secimi == "Çoklu Hisse Tarama" else [tekli_sembol]
         toplam_hisse = len(taranacak_liste)
         
         ilerleme_cubugu = st.progress(0.0)
@@ -533,7 +533,7 @@ else:
             uyum_puani = 0
             senaryo_adi = ""
             
-            if mod_secimi == "Çoklu Tarama Modu":
+            if mod_secimi == "Çoklu Hisse Tarama":
                 if strateji == "Senaryo Algoritması" and alt_secim:
                     harf = alt_secim.split(".")[0]
                     uyum_puani, senaryo_adi = senaryo_yuzde_tespit(df, temel, harf)
@@ -589,7 +589,7 @@ else:
                 )
                 gecici_eslesenler.append({"sembol": sembol, "uyum": uyum_puani, "pdf": pdf_bytes})
 
-            elif mod_secimi == "Çoklu Tarama Modu" and strateji == "Senaryo Algoritması" and uyum_puani >= 50:
+            elif mod_secimi == "Çoklu Hisse Tarama" and strateji == "Senaryo Algoritması" and uyum_puani >= 50:
                 gecici_bronz_liste.append({"sembol": sembol, "uyum": uyum_puani})
 
         # Tarama bitti, sonuçları HAFIZAYA kaydet (İndirme butonuna basınca silinmesin diye)
@@ -657,6 +657,7 @@ st.markdown("""
 </div>
 
 """, unsafe_allow_html=True)
+
 
 
 

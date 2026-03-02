@@ -581,9 +581,13 @@ else:
                 ema200 = son.get('EMA_200', kapanis)
                 ema_etiket = "POZİTİF (Fiyat > EMA200)" if kapanis > ema200 else "NEGATİF (Fiyat < EMA200)"
                 
+                # VWAP Değerini yakalama düzeltmesi
+                vwap_sutun = temel.get('VWAP_Col')
+                vwap_degeri = son.get(vwap_sutun, 'Bilinmiyor') if vwap_sutun else 'Bilinmiyor'
+                
                 pdf_bytes = pdf_bellege_uret(
                     df, sembol, temel, son, uyum_puani, ema_etiket, 
-                    temel.get('VWAP_Col', 'Bilinmiyor'), son.get('RSI_14', 50), 
+                    vwap_degeri, son.get('RSI_14', 50), 
                     son.get('MFI_14', 50), son.get('ADX_14', 0), 
                     temel.get('PD_DD', 'Bilinmiyor'), senaryo_adi, ""
                 )
@@ -657,6 +661,7 @@ st.markdown("""
 </div>
 
 """, unsafe_allow_html=True)
+
 
 
 

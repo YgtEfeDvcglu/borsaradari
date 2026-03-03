@@ -338,12 +338,12 @@ if mod_secimi == "Çoklu Hisse Tarama":
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("🎯 Strateji Seçimi")
-    strateji = st.sidebar.selectbox("Yöntem:", ["Lütfen Seçiniz...", "Senaryo Algoritması", "Risk Profili", "Manuel Kriterler"])
+    strateji = st.sidebar.radio("Yöntem:", ["Lütfen Seçiniz...", "Senaryo Algoritması", "Risk Profili", "Manuel Kriterler"])
     
     alt_secim = None
     rsi_sinir = mfi_sinir = pddd_sinir = adx_sinir = 0
     if strateji == "Senaryo Algoritması":
-        alt_secim = st.sidebar.selectbox("📌 Alt Kategori:", ["a. Yay Gevşemesi", "b. Roket Kalkışı", "c. Yorgunluk Sinyali", "d. Ucuzluk Tuzağı", "e. Güvenli Liman"])
+        alt_secim = st.sidebar.radio("📌 Alt Kategori:", ["a. Yay Gevşemesi", "b. Roket Kalkışı", "c. Yorgunluk Sinyali", "d. Ucuzluk Tuzağı", "e. Güvenli Liman"])
     elif strateji == "Risk Profili":
         alt_secim = st.sidebar.slider("Risk İştahınız (0: Güvenli, 100: Agresif)", 0, 100, 50)
     elif strateji == "Manuel Kriterler":
@@ -680,6 +680,7 @@ st.markdown("""
 </div>
 
 """, unsafe_allow_html=True)
+
 
 
 

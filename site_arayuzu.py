@@ -621,9 +621,91 @@ else:
     bronz_liste = st.session_state.get('bronz_hafiza', [])
 
     # Eğer hafızada tarama sonucu varsa ekrana bas (Butona basılmasa da hep ekranda kalır)
-    if 'eslesenler_hafiza' in st.session_state:
-        if len(eslesenler) == 0:
-            st.warning("⚠️ Seçtiğiniz kriterlere uygun hisse bulunamadı. Kriterleri esnetmeyi deneyin.")
+    # Eğer hafızada tarama sonucu varsa ekrana bas (Butona basılmasa da hep ekranda kalır)
+                if 'eslesenler_hafiza' in st.session_state:
+                    
+                    if st.button("📚 Başucu Rehberini Görüntüle / Gizle", use_container_width=True):
+                        st.session_state['rehber_goster'] = not st.session_state.get('rehber_goster', False)
+                    
+                    if st.session_state.get('rehber_goster', False):
+                        st.info("💡 Rehberi kapatmak için yukarıdaki butona tekrar basabilirsiniz. Raporlarınız aşağıda yer almaktadır.")
+                        col_r1, col_r2 = st.columns(2)
+                        with col_r1:
+                            with st.expander("📈 İndikatörler ve Temel Metrikler", expanded=True):
+                                st.markdown("""
+                                - **RSI (Göreceli Güç Endeksi):** 0-100 arası hız ölçer. 30 altı aşırı satım (tepki gelebilir), 70 üstü aşırı alımdır (düzeltme gelebilir).
+                                - **MFI (Para Akışı Endeksi):** RSI'ın hacimli versiyonudur. Fiyat artarken MFI artmıyorsa asıl para çıkıyordur. 20 altı aşırı satım, 80 üstü aşırı alımdır.
+                                - **ADX (Ortalama Yönsel Endeks):** Trendin gücünü ölçer. 25 üstü güçlü trend, 20 altı yatay/testere piyasasıdır.
+                                - **VWAP (Ağırlıklı Ortalama):** Gün içi adil fiyattır. Fiyat VWAP üstündeyse alıcılar baskındır.
+                                - **PD/DD:** Şirketin defter değerine göre pahalılığını gösterir. 1-2 makul, 5+ genelde pahalıdır.
+                                - **EMA 200:** Uzun vadeli ana trend yönüdür. Fiyat üstündeyse hisse sağlıklıdır.
+                                - **Net Borç / FAVÖK:** Borç ödeme kapasitesidir. 3'ün altı güvenli kabul edilir.
+                                """)
+                                
+                            with st.expander("📊 Grafikler ve Formasyonlar (Görsel Rehber)", expanded=False):
+                                st.markdown("**1. Boğa Piyasası [Bull Market]:** \n Fiyatların merdiven çıkar gibi sürekli yeni zirveler yaptığı, alıcıların iştahlı olduğu bereketli dönem. \"Malda kalma\" zamanıdır.")
+                                st.markdown("---")
+                                st.markdown("**2. Ayı Piyasası [Bear Market]:** \n Fiyatların asansörle iner gibi sürekli yeni dipler yaptığı, korkunun hakim olduğu dönem. Nakitte bekleme veya açığa satış zamanıdır.")
+                                st.markdown("---")
+                                st.markdown("**3. İkili Tepe / M Formasyonu [Double Top]:** \n Fiyatın aynı tavanı iki kez yoklayıp kıramamasıdır. \"Buradan ötesi yok, malı boşaltıyorlar\" diyen güçlü bir düşüş sinyalidir.")
+                                try: st.image("Görseller/ikili_tepe.jpg")
+                                except: st.caption("⚠️ [Görsel Bulunamadı: Lütfen uygulamanın klasörüne 'ikili_tepe.jpg' ekleyin]")
+                                st.markdown("---")
+                                st.markdown("**4. İkili Dip / W Formasyonu [Double Bottom]:** \n Fiyatın aynı tabandan iki kez destek bulup sekmesidir. \"Dibi gördük, artık yön yukarı\" diyen güçlü bir yükseliş sinyalidir.")
+                                try: st.image("Görseller/ikili_dip.jpg")
+                                except: st.caption("⚠️ [Görsel Bulunamadı: Lütfen uygulamanın klasörüne 'ikili_dip.jpg' ekleyin]")
+                                st.markdown("---")
+                                st.markdown("**5. Omuz Baş Omuz (OBO) Formasyonu [Head and Shoulders]:** \n Ortada büyük bir zirve (baş), yanlarda daha küçük iki zirve (omuzlar). Yükseliş partisinin bittiğini gösterir, boyun çizgisi aşağı kırılırsa kaçılır.")
+                                try: st.image("Görseller/obo.jpg")
+                                except: st.caption("⚠️ [Görsel Bulunamadı: Lütfen uygulamanın klasörüne 'obo.jpg' ekleyin]")
+                                st.markdown("---")
+                                st.markdown("**6. Ters OBO Formasyonu [Inverse Head and Shoulders]:** \n OBO'nun tepetaklak halidir. Ortada derin bir kuyu, yanlarda sığ iki kuyu. Düşüşün bittiğini ve sağlam bir yükseliş trendinin başlayacağını müjdeler.")
+                                try: st.image("Görseller/tobo.jpg")
+                                except: st.caption("⚠️ [Görsel Bulunamadı: Lütfen uygulamanın klasörüne 'tobo.jpg' ekleyin]")
+                                st.markdown("---")
+                                st.markdown("**7. Kulplu Fincan Formasyonu [Cup and Handle]:** \n Fiyat önce büyük bir çanak (fincan) çizer, sonra küçük bir düzeltme (kulp) yapar. Kulp yukarı kırıldığında, hisse fincanın derinliği kadar yukarı fırlamaya hazırlanır.")
+                                try: st.image("Görseller/fincan_kulp.jpg")
+                                except: st.caption("⚠️ [Görsel Bulunamadı: Lütfen uygulamanın klasörüne 'fincan_kulp.jpg' ekleyin]")
+                                st.markdown("---")
+                                st.markdown("**8. Takoz Formasyonu [Wedge Pattern]:** \n Fiyatın gittikçe daralan bir huniye sıkışmasıdır. Yükselen takoz (Ayı) genelde aşağı doğru patlar, düşen takoz (Boğa) ise yay gibi gerilip yukarı doğru patlar.")
+                                try: st.image("Görseller/takoz.png")
+                                except: st.caption("⚠️ [Görsel Bulunamadı: Lütfen uygulamanın klasörüne 'takoz.jpg' ekleyin]")
+                                st.markdown("---")
+                                st.markdown("**9. Bayrak Formasyonu [Flag Pattern]:** \n Sert bir hareket sonrası dikdörtgen şeklinde kısa bir mola. Direk yukarıysa (Boğa Bayrağı) moladan sonra yükseliş devam eder, direk aşağıysa (Ayı Bayrağı) düşüş devam eder.")
+                                try: st.image("Görseller/bayrak.png")
+                                except: st.caption("⚠️ [Görsel Bulunamadı: Lütfen uygulamanın klasörüne 'bayrak.jpg' ekleyin]")
+                                st.markdown("---")
+                                st.markdown("**10. Flama Formasyonu [Pennant Pattern]:** \n Bayrağın dikdörtgen değil, küçük bir simetrik üçgen halidir. Mantık aynıdır: Sert hareket (direk) -> kısa üçgen mola -> aynı yönde sert kopuş.")
+                                try: st.image("Görseller/flama.png")
+                                except: st.caption("⚠️ [Görsel Bulunamadı: Lütfen uygulamanın klasörüne 'flama.jpg' ekleyin]")
+
+                        with col_r2:
+                            with st.expander("🎯 Senaryo Sözlüğü", expanded=True):
+                                st.markdown("""
+                                - **Yay Gevşemesi:** Hisse o kadar çok satıldı ki satacak kimse kalmadı. 'Bedava' diyen alıcılar gelirse yay gibi fırlayabilir.
+                                - **Roket Kalkışı:** Hisse rüzgarı arkasına aldı. Güçlü şekilde yükseliyor, trene binmek için son çağrı olabilir.
+                                - **Yorgunluk Sinyali:** Zirveye çıktı ama nefesi kesiliyor. Fiyat yükselse de para çıkışı var, iniş başlayabilir.
+                                - **Ucuzluk Tuzağı:** Şirket kağıt üzerinde ucuz ama düşüş henüz bitmemiş olabilir. *Düşen bıçak tutulmaz.*
+                                - **Güvenli Liman:** Fırtınalı havada sığınılacak yer. Hızlı kazandırmaz ama kolay kolay da kaybettirmez.
+                                """)
+                                
+                            with st.expander("💡 Tavsiye Edilen Filtre Stratejileri", expanded=False):
+                                st.markdown(
+                                    "**1. Dip Avcısı (Yüksek Risk):**<br>"
+                                    "Panikle satılan ucuz hisseler.<br>"
+                                    "*(RSI: <35 | MFI: <30 | PD/DD: <2 | ADX: >25)*<br><br>"
+                                    "**2. Dengeli Trend (Orta Risk):**<br>"
+                                    "Arkasına güçlü trend almış istikrarlı hisseler.<br>"
+                                    "*(RSI: <55 | MFI: <50 | PD/DD: <4 | ADX: >20)*<br><br>"
+                                    "**3. Değer Yatırımcısı (Düşük Risk):**<br>"
+                                    "Teknik coşkudan ziyade ucuzluğa odaklanır.<br>"
+                                    "*(RSI: <45 | MFI: <45 | PD/DD: <1.5 | ADX: >15)*",
+                                    unsafe_allow_html=True
+                                )
+                        st.markdown("---")
+
+                    if len(eslesenler) == 0:
+                        st.warning("⚠️ Seçtiğiniz kriterlere uygun hisse bulunamadı. Kriterleri esnetmeyi deneyin.")
         else:
             st.success(f"🎉 Tarama Tamamlandı! {len(eslesenler)} adet eşleşme bulundu.")
             
@@ -680,6 +762,7 @@ st.markdown("""
 </div>
 
 """, unsafe_allow_html=True)
+
 
 
 

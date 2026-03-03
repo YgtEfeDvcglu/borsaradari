@@ -626,6 +626,12 @@ else:
             st.warning("⚠️ Seçtiğiniz kriterlere uygun hisse bulunamadı. Kriterleri esnetmeyi deneyin.")
         else:
             st.success(f"🎉 Tarama Tamamlandı! {len(eslesenler)} adet eşleşme bulundu.")
+
+            if st.button("🏠 Ana Ekrana Dön", use_container_width=True):
+                if 'eslesenler_hafiza' in st.session_state: del st.session_state['eslesenler_hafiza']
+                if 'bronz_hafiza' in st.session_state: del st.session_state['bronz_hafiza']
+                if 'hatali_hafiza' in st.session_state: del st.session_state['hatali_hafiza']
+                st.rerun()
             
             if len(eslesenler) > 1:
                 zip_buffer = io.BytesIO()
@@ -675,6 +681,7 @@ st.markdown("""
 </div>
 
 """, unsafe_allow_html=True)
+
 
 
 

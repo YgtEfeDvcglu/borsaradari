@@ -626,12 +626,6 @@ else:
             st.warning("⚠️ Seçtiğiniz kriterlere uygun hisse bulunamadı. Kriterleri esnetmeyi deneyin.")
         else:
             st.success(f"🎉 Tarama Tamamlandı! {len(eslesenler)} adet eşleşme bulundu.")
-
-            if st.button("🏠 Ana Ekrana Dön", use_container_width=True):
-                if 'eslesenler_hafiza' in st.session_state: del st.session_state['eslesenler_hafiza']
-                if 'bronz_hafiza' in st.session_state: del st.session_state['bronz_hafiza']
-                if 'hatali_hafiza' in st.session_state: del st.session_state['hatali_hafiza']
-                st.rerun()
             
             if len(eslesenler) > 1:
                 zip_buffer = io.BytesIO()
@@ -670,6 +664,11 @@ else:
                     bronz_liste.sort(key=lambda x: x['uyum'], reverse=True)
                     for br in bronz_liste:
                         st.markdown(f"- **{br['sembol']}** (Uyum: %{br['uyum']:.1f})")
+            if st.button("🏠 Ana Ekrana Dön", use_container_width=True):
+                if 'eslesenler_hafiza' in st.session_state: del st.session_state['eslesenler_hafiza']
+                if 'bronz_hafiza' in st.session_state: del st.session_state['bronz_hafiza']
+                if 'hatali_hafiza' in st.session_state: del st.session_state['hatali_hafiza']
+                st.rerun()
 # --- SAYFA ALTI (FOOTER) YASAL UYARI METNİ ---
 st.markdown("---")
 st.markdown("""
@@ -681,6 +680,7 @@ st.markdown("""
 </div>
 
 """, unsafe_allow_html=True)
+
 
 
 

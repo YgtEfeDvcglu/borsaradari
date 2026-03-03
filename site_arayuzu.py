@@ -119,7 +119,7 @@ def hisse_verileri_getir(sembol):
         try:
             df.ta.vwap(append=True)
             vwap_col = [col for col in df.columns if 'VWAP' in col][0]
-        except:
+        except Exception as e:
             vwap_col = None
 
         try:
@@ -127,12 +127,12 @@ def hisse_verileri_getir(sembol):
             # PD/DD için Yahoo'nun kullanabileceği alternatif anahtarları sırayla deniyoruz:
             pddd = info.get('priceToBook') or info.get('trailingPriceToBook') or info.get('forwardPriceToBook') or 'Bilinmiyor'
             borc = info.get('netDebtToEbitda', 'Bilinmiyor')
-        except:
+        except Exception as e:
             pddd, borc = 'Bilinmiyor', 'Bilinmiyor'
 
         temel = {'PD_DD': pddd, 'Borc_FAVOK': borc, 'VWAP_Col': vwap_col, 'mevsimsel_pozitif': False}
         return df, temel
-    except:
+    except Exception as e:
         return None, None
 
 def uyum_hesapla(deger, hedef, esik, yon="dusuk"):
@@ -761,6 +761,7 @@ st.markdown("""
 </div>
 
 """, unsafe_allow_html=True)
+
 
 
 

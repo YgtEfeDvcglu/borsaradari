@@ -714,10 +714,10 @@ else:
                     )
             st.markdown("---")
         hatalilar = st.session_state.get('hatali_hafiza', [])
-            if hatalilar:
-                with st.expander(f"⚠️ Veri alınamayan hisseler ({len(hatalilar)})", expanded=(len(eslesenler) == 0 and len(hatalilar) <= 5)):
-                    st.caption("Yahoo Finance veri vermedi, hisse kodu/uzantısı hatalı veya 200 günden kısa işlem geçmişi var.")
-                    st.write(", ".join(hatalilar))
+        if hatalilar:
+             with st.expander(f"⚠️ Veri alınamayan hisseler ({len(hatalilar)})", expanded=(len(eslesenler) == 0 and len(hatalilar) <= 5)):
+                st.caption("Yahoo Finance veri vermedi, hisse kodu/uzantısı hatalı veya 200 günden kısa işlem geçmişi var.")
+                st.write(", ".join(hatalilar))
         if len(eslesenler) == 0:
             st.warning("⚠️ Seçtiğiniz kriterlere uygun hisse bulunamadı. Kriterleri esnetmeyi deneyin.")
         else:

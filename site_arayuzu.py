@@ -313,7 +313,7 @@ def karne_goster(k, grafik):
     st.caption("Aynı olayı tekrar saymamak için sinyaller arasında en az 10 işlem günü bırakılır. Örneklem küçükse (5'ten az) sonuçlara güvenmeyin. Geçmiş performans gelecek için garanti değildir; yatırım tavsiyesi değildir.")
     st.line_chart(grafik)
     
-def pdf_bellege_uret(df, sembol, temel, son, puan, ema_etiket, vwap_deger, rsi_val, mfi_val, adx_val, pddd, senaryo_adi, senaryo_metni, tepki_potansiyeli=0):
+def pdf_bellege_uret(df, sembol, temel, son, puan, ema_etiket, vwap_deger, rsi_val, mfi_val, adx_val, pddd, senaryo_adi, senaryo_metni, tepki_potansiyeli=0, karne=None):
     pdf_buffer = io.BytesIO()
     pdf = PdfPages(pdf_buffer)
     
@@ -470,6 +470,7 @@ st.sidebar.title("⚙️ Kumanda Paneli")
 mod_secimi = st.sidebar.radio("Tarama Modu", ["Çoklu Hisse Tarama", "Tekli Hisse Tarama", "İzleme Listesi"])
 
 tekli_sembol = ""
+uyum_esigi = 75
 if mod_secimi == "Çoklu Hisse Tarama":
     toplam_sayi = len(bist_listesi)
     st.sidebar.markdown("---")

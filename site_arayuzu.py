@@ -179,7 +179,140 @@ def senaryo_yuzde_tespit(df, temel, secilen_senaryo):
 
     if uyum1 < 50 or uyum2 < 50: return 0.0, baslik
     return (uyum1 + uyum2) / 2.0, baslik
+@st.cache_data(ttl=900, show_spinner=False)
+def endeks_getir():
+    try:
+        e = yf.Ticker("XU100.IS").history(period="1y", interval="1d")
+        return e if not e.empty else None
+    except Exception:
+        return None
 
+def _yz(x):
+    return "—" if x != x else f"%{x:+.1f}"
+
+def gecmis_sinyal_testi(df, harf):
+    kosullar = {
+        'a': (df['RSI_14'] < 32) & (df['MFI_14'] < 28),
+        'b': (df['RSI_14'] > 52) & (df['ADX_14'] > 22),
+        'c': (df['RSI_14'] > 70) & (df['MFI_14'] > 65),
+    }
+    secilen, son_i = [], -999
+    for i, s in enumerate(kosullar[harf].tolist()):
+        if s and i - son_i >= 10:  # aynı olayı tekrar saymamak için sinyaller arası en az 10 gün
+            secilen.append(i)
+            son_i = i
+    sonuc = {}
+    for h in (5, 10, 20):
+        ileri = (df['Close'].shift(-h) / df['Close'] - 1) * 100
+        ornek = ileri.iloc[secilen].dropna()
+        sonuc[h] = {"n": len(ornek), "ort": ornek.mean(), "pozitif": (ornek > 0).mean() * 100, "genel": ileri.mean()}
+    return sonuc
+
+def hisse_karnesi(df, temel, sembol):
+    son = df.iloc[-1]
+    kap = float(son['Close']); rsi = float(son.get('RSI_14', 50)); mfi = float(son.get('MFI_14', 50)); adx = float(son.get('ADX_14', 0))
+    ema = float(son.get('EMA_200', kap))
+    y = []
+
+    # 1) Ana trend
+    fark = (kap / ema - 1) * 100
+    egim = (ema / float(df['EMA_200'].iloc[-21]) - 1) * 100 if len(df) > 221 else 0.0
+    if fark > 0:
+        y.append(("🟢", f"Fiyat EMA200'ün %{fark:.1f} üzerinde; ana trend {'yükseliyor' if egim > 0 else 'yataylaşıyor/zayıflıyor'} (EMA200 son 20 günde %{egim:+.1f})."))
+    else:
+        y.append(("🔴", f"Fiyat EMA200'ün %{abs(fark):.1f} altında; ana trend zayıf. EMA200'e dönmek için %{(ema / kap - 1) * 100:.1f} yükseliş gerekir."))
+
+    # 2) Momentum (RSI)
+    if rsi < 30: y.append(("🟡", f"RSI {rsi:.0f}: aşırı satım. Tepki alımı gelebilir ama trend aşağıysa 'düşen bıçak' riski sürer."))
+    elif rsi < 45: y.append(("🟠", f"RSI {rsi:.0f}: momentum zayıf, henüz toparlanma sinyali yok."))
+    elif rsi < 55: y.append(("⚪", f"RSI {rsi:.0f}: momentum nötr."))
+    elif rsi < 70: y.append(("🟢", f"RSI {rsi:.0f}: momentum güçlü ve henüz aşırı ısınmamış."))
+    else: y.append(("🟡", f"RSI {rsi:.0f}: aşırı alım. Düzeltme riski artmış durumda."))
+
+    # 3) Para akışı (fiyat - MFI uyumsuzluğu)
+    f10 = (kap / float(df['Close'].iloc[-11]) - 1) * 100
+    m10 = mfi - float(df['MFI_14'].iloc[-11])
+    if f10 > 2 and m10 < -5: y.append(("⚠️", f"Negatif uyumsuzluk: fiyat 10 günde %{f10:+.1f} yükselirken MFI {m10:+.0f} puan düştü; yükseliş hacimle desteklenmiyor."))
+    elif f10 < -2 and m10 > 5: y.append(("🟢", f"Pozitif uyumsuzluk: fiyat 10 günde %{f10:+.1f} düşerken MFI {m10:+.0f} puan arttı; satış baskısı azalıyor olabilir."))
+    elif mfi < 20: y.append(("🟡", f"MFI {mfi:.0f}: para çıkışı aşırı, dip bölgesine yakın."))
+    elif mfi > 80: y.append(("🟡", f"MFI {mfi:.0f}: aşırı para girişi, zirve bölgesine yakın."))
+    else: y.append(("⚪", f"MFI {mfi:.0f}: para akışı dengeli."))
+
+    # 4) Trend gücü (ADX)
+    if adx >= 25: y.append(("🟢" if fark > 0 else "🔴", f"ADX {adx:.0f}: trend güçlü ({'yukarı' if fark > 0 else 'aşağı'} yönlü)."))
+    elif adx < 20: y.append(("⚪", f"ADX {adx:.0f}: yatay/testere piyasası, trend sinyalleri güvenilmez."))
+    else: y.append(("⚪", f"ADX {adx:.0f}: trend oluşum aşamasında."))
+
+    # 5) 52 haftalık konum
+    yil = df.tail(252)
+    ust, alt = float(yil['High'].max()), float(yil['Low'].min())
+    if ust > alt > 0:
+        y.append(("📏", f"52 haftalık aralıkta konum: %{(kap - alt) / (ust - alt) * 100:.0f} (0=dip, 100=zirve). Zirveye uzaklık %{(kap / ust - 1) * 100:.1f}, dipten uzaklık %{(kap / alt - 1) * 100:+.1f}."))
+
+    # 6) Hacim ilgisi
+    v5, v25 = float(df['Volume'].tail(5).mean()), float(df['Volume'].tail(25).mean())
+    if v25 > 0:
+        if v5 / v25 >= 1.5: y.append(("📈", f"Son 5 günlük hacim, 25 günlük ortalamanın {v5 / v25:.1f} katı: ilgi artıyor."))
+        elif v5 / v25 <= 0.6: y.append(("📉", f"Son 5 günlük hacim, 25 günlük ortalamanın {v5 / v25:.1f} katı: ilgi azalıyor."))
+
+    # 7) Oynaklık (ATR)
+    tr = pd.concat([df['High'] - df['Low'], (df['High'] - df['Close'].shift()).abs(), (df['Low'] - df['Close'].shift()).abs()], axis=1).max(axis=1)
+    atr = float(tr.tail(14).mean()) / kap * 100
+    y.append(("🌊", f"Günlük ortalama hareket aralığı (ATR) ≈ %{atr:.1f}: oynaklık {'yüksek' if atr > 4 else ('orta' if atr > 2.5 else 'düşük')}."))
+
+    # 8) Endekse göre güç (sadece BIST hisseleri)
+    if sembol.endswith(".IS"):
+        e = endeks_getir()
+        if e is not None and len(e) > 64 and len(df) > 64:
+            h3 = (kap / float(df['Close'].iloc[-64]) - 1) * 100
+            e3 = (float(e['Close'].iloc[-1]) / float(e['Close'].iloc[-64]) - 1) * 100
+            y.append(("🏁", f"Son ~3 ayda hisse %{h3:+.1f}, BIST 100 %{e3:+.1f}: endeksin {'önünde' if h3 > e3 else 'gerisinde'} ({h3 - e3:+.1f} puan)."))
+
+    # 9) Değerleme
+    try:
+        p = float(temel.get('PD_DD', 'Bilinmiyor'))
+        if p <= 0: y.append(("💰", "PD/DD negatif: özsermaye negatif olabilir, bilançoyu kontrol et."))
+        elif p < 1: y.append(("💰", f"PD/DD {p:.2f}: defter değerinin altında işlem görüyor (ucuz görünüm; nedenini araştır)."))
+        elif p < 2: y.append(("💰", f"PD/DD {p:.2f}: makul seviyede."))
+        elif p < 4: y.append(("💰", f"PD/DD {p:.2f}: defter değerine göre pahalılaşmış."))
+        else: y.append(("💰", f"PD/DD {p:.2f}: defter değerine göre pahalı."))
+    except (TypeError, ValueError):
+        pass
+
+    # 10) Senaryo uyumları + geçmiş sinyal testi
+    uyum, baslik = {}, {}
+    for h in "abcde":
+        uyum[h], baslik[h] = senaryo_yuzde_tespit(df, temel, h)
+    aktifler = [f"{baslik[h]} %{uyum[h]:.0f}" for h in "abcde" if uyum[h] >= 50]
+    y.insert(0, ("🎯", ("Senaryo uyumu: " + ", ".join(aktifler) + ".") if aktifler else "Şu an hiçbir senaryoya belirgin (≥%50) uyum yok."))
+
+    tablo = []
+    for h, ad in {"a": "Yay Gevşemesi", "b": "Roket Kalkışı", "c": "Yorgunluk Sinyali"}.items():
+        t = gecmis_sinyal_testi(df, h)
+        tablo.append({"Senaryo": ad, "Şu an": (f"✅ %{uyum[h]:.0f}" if uyum[h] >= 50 else "—"), "Geçmişte (adet)": t[10]["n"],
+                      "5g ort.": _yz(t[5]["ort"]), "10g ort.": _yz(t[10]["ort"]), "20g ort.": _yz(t[20]["ort"]),
+                      "10g yükseliş oranı": ("—" if t[10]["n"] < 3 else f"%{t[10]['pozitif']:.0f}"), "Hisse genel 10g ort.": _yz(t[10]["genel"])})
+        if uyum[h] >= 50:
+            if t[10]["n"] >= 5:
+                y.append(("🧪", f"Geçmiş test: bu hissede {ad} senaryosu 3 yılda {t[10]['n']} kez tetiklendi; 10 işlem günü sonra ortalama {_yz(t[10]['ort'])}, yükselişle kapanma oranı %{t[10]['pozitif']:.0f} (hissenin genel 10 günlük ortalaması {_yz(t[10]['genel'])})."))
+            else:
+                y.append(("🧪", f"Geçmiş test: {ad} senaryosu bu hissede 3 yılda yalnızca {t[10]['n']} kez tetiklendi; örneklem yetersiz."))
+
+    # Genel teknik görünüm skoru (-5 ... +5)
+    skor = (1 if kap > ema else -1) + (1 if egim > 0 else -1) + (1 if rsi >= 50 else -1) + (1 if mfi >= 50 else -1)
+    if adx >= 25: skor += 1 if kap > ema else -1
+    genel, ikon = ("Olumlu", "🟢") if skor >= 3 else (("Zayıf", "🔴") if skor <= -3 else ("Kararsız", "🟡"))
+    return {"genel": genel, "ikon": ikon, "skor": skor, "yorumlar": y, "tablo": tablo}
+
+def karne_goster(k, grafik):
+    st.markdown(f"#### {k['ikon']} Genel Teknik Görünüm: **{k['genel']}** (skor {k['skor']:+d} / ±5)")
+    for ikon, metin in k['yorumlar']:
+        st.markdown(f"{ikon} {metin}")
+    st.markdown("**🧪 Bu hissede senaryolar geçmişte nasıl çalıştı? (son 3 yıl)**")
+    st.dataframe(pd.DataFrame(k['tablo']), use_container_width=True, hide_index=True)
+    st.caption("Aynı olayı tekrar saymamak için sinyaller arasında en az 10 işlem günü bırakılır. Örneklem küçükse (5'ten az) sonuçlara güvenmeyin. Geçmiş performans gelecek için garanti değildir; yatırım tavsiyesi değildir.")
+    st.line_chart(grafik)
+    
 def pdf_bellege_uret(df, sembol, temel, son, puan, ema_etiket, vwap_deger, rsi_val, mfi_val, adx_val, pddd, senaryo_adi, senaryo_metni, tepki_potansiyeli=0):
     pdf_buffer = io.BytesIO()
     pdf = PdfPages(pdf_buffer)
@@ -311,7 +444,21 @@ def pdf_bellege_uret(df, sembol, temel, son, puan, ema_etiket, vwap_deger, rsi_v
     ax6.set_ylabel("Hacim", fontweight='bold')
 
     pdf.savefig(fig2, bbox_inches='tight')
-    
+
+    if karne:
+        fig3 = plt.figure(figsize=(15, 12))
+        fig3.suptitle(f"{sembol} - AKILLI YORUM VE GEÇMİŞ SİNYAL TESTİ", fontsize=18, fontweight='bold', color='darkgreen')
+        ax_y = fig3.add_subplot(111)
+        ax_y.axis('off')
+        satirlar = [f"GENEL TEKNİK GÖRÜNÜM: {karne['genel'].upper()} (skor {karne['skor']:+d} / ±5)", ""]
+        for _, metin in karne['yorumlar']:
+            satirlar += textwrap.wrap("- " + metin, width=115, subsequent_indent="  ")
+        satirlar += ["", "GEÇMİŞ SENARYO TESTİ (son 3 yıl):"]
+        for s in karne['tablo']:
+            satirlar += textwrap.wrap(" | ".join(f"{a}: {b}" for a, b in s.items()).replace("✅", "[AKTİF]"), width=115, subsequent_indent="    ")
+        ax_y.text(0.0, 0.97, "\n".join(satirlar), va='top', ha='left', fontsize=11, transform=ax_y.transAxes)
+        pdf.savefig(fig3, bbox_inches='tight')
+        
     pdf.close()
     plt.close('all')
     return pdf_buffer.getvalue()
@@ -320,7 +467,7 @@ def pdf_bellege_uret(df, sembol, temel, son, puan, ema_etiket, vwap_deger, rsi_v
 # BÖLÜM 2: YAN MENÜ (KUMANDA PANELİ)
 # ==============================================================================
 st.sidebar.title("⚙️ Kumanda Paneli")
-mod_secimi = st.sidebar.radio("Tarama Modu", ["Çoklu Hisse Tarama", "Tekli Hisse Tarama"])
+mod_secimi = st.sidebar.radio("Tarama Modu", ["Çoklu Hisse Tarama", "Tekli Hisse Tarama", "İzleme Listesi"])
 
 tekli_sembol = ""
 if mod_secimi == "Çoklu Hisse Tarama":
@@ -368,7 +515,14 @@ elif mod_secimi == "Tekli Hisse Tarama":
     • <b>Hong Kong:</b> <code>.HK</code> (Örn: 0700.HK)
     </div>
     """, unsafe_allow_html=True)
-
+elif mod_secimi == "İzleme Listesi":
+    if 'izleme_metni' not in st.session_state:
+        st.session_state['izleme_metni'] = st.query_params.get("izleme", "THYAO.IS,ASELS.IS,KCHOL.IS").replace(",", ", ")
+    st.sidebar.text_area("⭐ Hisse kodları (virgülle ayırın):", key='izleme_metni', height=110)
+    izleme_listesi = list(dict.fromkeys(s.strip().upper() for s in st.session_state['izleme_metni'].replace("\n", ",").split(",") if s.strip()))
+    st.query_params["izleme"] = ",".join(izleme_listesi)
+    st.sidebar.caption("🔖 Tarayıcı adresi listenle birlikte güncellenir: sayfayı yer imine ekle, listen hep hazır olsun. Kodlara uzantıyı unutma (örn. THYAO.IS).")
+    
 st.sidebar.markdown("---")
 buton_sutun1, buton_sutun2 = st.sidebar.columns(2)
 baslat = buton_sutun1.button("▶️ BAŞLAT", use_container_width=True)
@@ -528,7 +682,9 @@ else:
     
     # EĞER YENİ BİR TARAMA İSTENİYORSA (Sadece butona basıldıysa burası çalışır)
     if baslat:
-        taranacak_liste = bist_listesi[baslangic-1:bitis] if mod_secimi == "Çoklu Hisse Tarama" else [tekli_sembol]
+        if mod_secimi == "Çoklu Hisse Tarama": taranacak_liste = bist_listesi[baslangic-1:bitis]
+        elif mod_secimi == "İzleme Listesi": taranacak_liste = izleme_listesi
+        else: taranacak_liste = [tekli_sembol]
         toplam_hisse = len(taranacak_liste)
         
         ilerleme_cubugu = st.progress(0.0)
@@ -536,6 +692,7 @@ else:
         gecici_eslesenler = []
         gecici_bronz_liste = []
         gecici_hatali = []
+        nabiz_listesi = []
         import time # Çubuğun mobilde donmasını engellemek için
         
         for i, sembol in enumerate(taranacak_liste):
@@ -547,7 +704,14 @@ else:
             if df is None:
                 gecici_hatali.append(sembol)
                 continue
-
+            _s = df.iloc[-1]
+            _v25 = df['Volume'].tail(25).mean()
+            nabiz_listesi.append({"Hisse": sembol,
+                                  "Günlük %": round(float((_s['Close'] / df['Close'].iloc[-2] - 1) * 100), 2),
+                                  "Hacim x": round(float(_s['Volume'] / _v25), 1) if _v25 > 0 else 0.0,
+                                  "RSI": round(float(_s.get('RSI_14', 50)), 1),
+                                  "EMA200 üstü": bool(_s['Close'] > _s.get('EMA_200', _s['Close']))})
+            
             uyum_puani = 0
             senaryo_adi = ""
             
@@ -602,19 +766,20 @@ else:
                 # VWAP Değerini yakalama düzeltmesi
                 vwap_sutun = temel.get('VWAP_Col')
                 vwap_degeri = son.get(vwap_sutun, 'Bilinmiyor') if vwap_sutun else 'Bilinmiyor'
-                
+
+                karne = hisse_karnesi(df, temel, sembol)
                 pdf_bytes = pdf_bellege_uret(
                     df, sembol, temel, son, uyum_puani, ema_etiket, 
                     vwap_degeri, son.get('RSI_14', 50), 
                     son.get('MFI_14', 50), son.get('ADX_14', 0), 
-                    temel.get('PD_DD', 'Bilinmiyor'), senaryo_adi, ""
+                    temel.get('PD_DD', 'Bilinmiyor'), senaryo_adi, "", karne=karne
                 )
                 gecici_eslesenler.append({"sembol": sembol, "uyum": uyum_puani, "pdf": pdf_bytes,
                                           "kapanis": round(float(kapanis), 2), "rsi": round(float(son.get('RSI_14', 0)), 1),
                                           "mfi": round(float(son.get('MFI_14', 0)), 1), "adx": round(float(son.get('ADX_14', 0)), 1),
                                           "pddd": round(float(pd.to_numeric(temel.get('PD_DD'), errors='coerce')), 2),
                                           "trend": "↑" if kapanis > ema200 else "↓"})
-
+                    gecici_eslesenler[-1].update({"gorunum": f"{karne['ikon']} {karne['genel']}", "karne": karne, "grafik": df[['Close', 'EMA_200']].tail(252)})
 
             elif mod_secimi == "Çoklu Hisse Tarama" and uyum_puani >= 50:
                 gecici_bronz_liste.append({"sembol": sembol, "uyum": uyum_puani})
@@ -624,6 +789,7 @@ else:
         st.session_state['eslesenler_hafiza'] = gecici_eslesenler
         st.session_state['bronz_hafiza'] = gecici_bronz_liste
         st.session_state['hatali_hafiza'] = gecici_hatali
+        st.session_state['nabiz_hafiza'] = nabiz_listesi
         durum_metni.empty()
         ilerleme_cubugu.empty()
 
@@ -713,20 +879,52 @@ else:
                         unsafe_allow_html=True
                     )
             st.markdown("---")
+
+        nabiz = st.session_state.get('nabiz_hafiza', [])
+        if len(nabiz) >= 10:
+            ndf = pd.DataFrame(nabiz)
+            st.subheader("📡 Piyasa Nabzı")
+            n1, n2, n3, n4 = st.columns(4)
+            oran = ndf['EMA200 üstü'].mean() * 100
+            n1.metric("Taranan hisse", len(ndf))
+            n2.metric("EMA200 üstünde", f"%{oran:.0f}")
+            n3.metric("Aşırı satım (RSI<30)", f"%{(ndf['RSI'] < 30).mean() * 100:.0f}")
+            n4.metric("Aşırı alım (RSI>70)", f"%{(ndf['RSI'] > 70).mean() * 100:.0f}")
+            st.caption(f"Piyasa genişliği: {'zayıf' if oran < 30 else ('güçlü' if oran > 70 else 'karışık')} | Yükselen: {(ndf['Günlük %'] > 0).sum()} | Düşen: {(ndf['Günlük %'] < 0).sum()} | Ortalama günlük değişim: %{ndf['Günlük %'].mean():+.2f}")
+            t1, t2, t3 = st.columns(3)
+            with t1:
+                st.markdown("**🚀 En çok yükselen**")
+                st.dataframe(ndf.nlargest(5, 'Günlük %')[['Hisse', 'Günlük %']], hide_index=True, use_container_width=True)
+            with t2:
+                st.markdown("**🔻 En çok düşen**")
+                st.dataframe(ndf.nsmallest(5, 'Günlük %')[['Hisse', 'Günlük %']], hide_index=True, use_container_width=True)
+            with t3:
+                st.markdown("**🔊 Hacim patlaması (son gün / 25 gün ort.)**")
+                st.dataframe(ndf.nlargest(5, 'Hacim x')[['Hisse', 'Hacim x']], hide_index=True, use_container_width=True)
+            st.markdown("---")
+        
         hatalilar = st.session_state.get('hatali_hafiza', [])
         if hatalilar:
              with st.expander(f"⚠️ Veri alınamayan hisseler ({len(hatalilar)})", expanded=(len(eslesenler) == 0 and len(hatalilar) <= 5)):
                 st.caption("Yahoo Finance veri vermedi, hisse kodu/uzantısı hatalı veya 200 günden kısa işlem geçmişi var.")
                 st.write(", ".join(hatalilar))
         if len(eslesenler) == 0:
-            st.warning("⚠️ Seçtiğiniz kriterlere uygun hisse bulunamadı. Kriterleri esnetmeyi deneyin.")
+            st.warning("⚠️ Eşleşme bulunamadı. Çoklu taramada kriterleri esnetmeyi; tekli/izleme modunda hisse kodunu ve uzantısını (örn. THYAO.IS) kontrol etmeyi deneyin.")
         else:
             st.success(f"🎉 Tarama Tamamlandı! {len(eslesenler)} adet eşleşme bulundu.")
             
-            tablo_df = pd.DataFrame(eslesenler).drop(columns=["pdf"]).rename(columns={"sembol": "Hisse", "uyum": "Uyum %", "kapanis": "Kapanış", "rsi": "RSI", "mfi": "MFI", "adx": "ADX", "pddd": "PD/DD", "trend": "Trend"})
+            tablo_df = pd.DataFrame([{k: v for k, v in h.items() if k not in ("pdf", "karne", "grafik")} for h in eslesenler]).rename(columns={"sembol": "Hisse", "uyum": "Uyum %", "kapanis": "Kapanış", "rsi": "RSI", "mfi": "MFI", "adx": "ADX", "pddd": "PD/DD", "trend": "Trend", "gorunum": "Görünüm"})
             tablo_df["Uyum %"] = tablo_df["Uyum %"].round(1)
             st.dataframe(tablo_df, use_container_width=True, hide_index=True)
             st.download_button("📊 Özet Tabloyu CSV İndir", tablo_df.to_csv(index=False).encode("utf-8-sig"), "Borsa_Ozet.csv", "text/csv")
+
+            karneli = [h for h in eslesenler if h.get('karne')]
+            if karneli:
+                secili_kod = karneli[0]['sembol'] if len(karneli) == 1 else st.selectbox("🧠 Akıllı karne için hisse seç:", [h['sembol'] for h in karneli])
+                secili = next(h for h in karneli if h['sembol'] == secili_kod)
+                st.markdown(f"### 🧠 {secili_kod} - Akıllı Karne")
+                karne_goster(secili['karne'], secili['grafik'])
+                st.markdown("---")
 
             if len(eslesenler) > 1:
                 zip_buffer = io.BytesIO()

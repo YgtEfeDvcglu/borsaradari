@@ -47,7 +47,7 @@ bist_listesi = [
     # --- 1. KADEME: BIST 30 (1-30) ---
     "ENKAI.IS", "DSTKF.IS", "KCHOL.IS", "TUPRS.IS", "THYAO.IS", "FROTO.IS", "TCELL.IS", "TTKOM.IS", "EREGL.IS", "ASTOR.IS",
     "GUBRF.IS", "MGROS.IS", "TAVHL.IS", "PGSUS.IS", "EKGYO.IS", "PETKM.IS", "KRDMD.IS", "AKBNK.IS", "ISCTR.IS",
-    "YKBNK.IS", "SAHOL.IS", "GARAN.IS", "BIMAS.IS", "ASELS.IS", "SISE.IS", "SASA.IS", "TOASO.IS", "TRALT.IS", "AEFES.IS", "VAKBN.IS"
+    "YKBNK.IS", "SAHOL.IS", "GARAN.IS", "BIMAS.IS", "ASELS.IS", "SISE.IS", "SASA.IS", "TOASO.IS", "TRALT.IS", "AEFES.IS", "VAKBN.IS",
 
     # --- 2. KADEME: BIST 50 (Sadece BIST 30 dışındakiler) (31-50) ---
     "ULKER.IS", "HALKB.IS", "CCOLA.IS", "BRSAN.IS", "ARCLK.IS", "TRMET.IS", "CIMSA.IS", "ALARK.IS", "MAVI.IS", "TURSG.IS",
@@ -100,9 +100,9 @@ bist_listesi = [
     "PAGYO.IS", "PCILT.IS", "PNSUT.IS", "PRDGS.IS", "RALYH.IS", "RAYSG.IS", "RYGYO.IS", "SAMAT.IS", "SANEL.IS", "SANFM.IS",
     "SEKFK.IS", "SEYKM.IS", "SILVR.IS", "SMART.IS", "SNICA.IS", "GATEG.IS", "SONME.IS", "SRVGY.IS", "TARKM.IS", "TATEN.IS",
     "TDGYO.IS", "TGSAS.IS", "TLMAN.IS", "TMPOL.IS", "TRGYO.IS", "TRILC.IS", "TUCLK.IS", "UFUK.IS", "ULAS.IS", "ULUFA.IS",
-    "UNLU.IS", "YAPRK.IS", "YBTAS.IS", "YESIL.IS", "GOZDE.IS", "NTHOL.IS", "KLKIM.IS", "ARFYE.IS", "ATATR.IS", "BESTE.IS", "FRMPL.IS", "MEYSU.IS", "NETCD.IS", "UCAYM.IS", "YESİL.IS", "ZGYO.IS"
+    "UNLU.IS", "YAPRK.IS", "YBTAS.IS", "YESIL.IS", "GOZDE.IS", "NTHOL.IS", "KLKIM.IS", "ARFYE.IS", "ATATR.IS", "BESTE.IS", "FRMPL.IS", "MEYSU.IS", "NETCD.IS", "UCAYM.IS", "ZGYO.IS"
 ]
-
+@st.cache_data(ttl=900, show_spinner=False)
 def hisse_verileri_getir(sembol):
     try:
         hisse = yf.Ticker(sembol)
@@ -352,7 +352,7 @@ if mod_secimi == "Çoklu Hisse Tarama":
         mfi_sinir = st.sidebar.number_input("MFI Sınırı (Altında)", value=45.0)
         pddd_sinir = st.sidebar.number_input("PD/DD Sınırı (Altında)", value=2.0)
         adx_sinir = st.sidebar.number_input("ADX Sınırı (Üstünde)", value=20.0)
-
+    uyum_esigi = st.sidebar.slider("🎚️ Minimum Uyum Eşiği (%)", 50, 100, 75, step=5, help="Düşürürsen daha fazla hisse eşleşir, yükseltirsen daha seçici olur.")
 elif mod_secimi == "Tekli Hisse Tarama":
     tekli_sembol = st.sidebar.text_input("Hisse Kodu Girin (Örn: THYAO.IS):", value="THYAO.IS").upper()
     
@@ -374,6 +374,9 @@ buton_sutun1, buton_sutun2 = st.sidebar.columns(2)
 baslat = buton_sutun1.button("▶️ BAŞLAT", use_container_width=True)
 durdur = buton_sutun2.button("🛑 DURDUR", use_container_width=True)
 
+if baslat and mod_secimi == "Çoklu Hisse Tarama" and strateji == "Lütfen Seçiniz...":
+    st.sidebar.warning("⚠️ Önce bir strateji seçiniz.")
+    baslat = False
 if durdur:
     # 1. Hafızadaki tüm eski tarama verilerini sil
     if 'eslesenler_hafiza' in st.session_state:
@@ -532,7 +535,7 @@ else:
         durum_metni = st.empty()
         gecici_eslesenler = []
         gecici_bronz_liste = []
-
+        gecici_hatali = []
         import time # Çubuğun mobilde donmasını engellemek için
         
         for i, sembol in enumerate(taranacak_liste):
@@ -541,8 +544,10 @@ else:
             time.sleep(0.01) # Arayüze nefes aldırır
             
             df, temel = hisse_verileri_getir(sembol)
-            if df is None: continue
-            
+            if df is None:
+                gecici_hatali.append(sembol)
+                continue
+
             uyum_puani = 0
             senaryo_adi = ""
             
@@ -588,7 +593,7 @@ else:
                 uyum_puani = 100
                 senaryo_adi = "Tekli İnceleme"
 
-            if uyum_puani >= 75:
+            if uyum_puani >= uyum_esigi:
                 son = df.iloc[-1]
                 kapanis = son['Close']
                 ema200 = son.get('EMA_200', kapanis)
@@ -604,14 +609,21 @@ else:
                     son.get('MFI_14', 50), son.get('ADX_14', 0), 
                     temel.get('PD_DD', 'Bilinmiyor'), senaryo_adi, ""
                 )
-                gecici_eslesenler.append({"sembol": sembol, "uyum": uyum_puani, "pdf": pdf_bytes})
+                gecici_eslesenler.append({"sembol": sembol, "uyum": uyum_puani, "pdf": pdf_bytes,
+                                          "kapanis": round(float(kapanis), 2), "rsi": round(float(son.get('RSI_14', 0)), 1),
+                                          "mfi": round(float(son.get('MFI_14', 0)), 1), "adx": round(float(son.get('ADX_14', 0)), 1),
+                                          "pddd": round(float(pd.to_numeric(temel.get('PD_DD'), errors='coerce')), 2),
+                                          "trend": "↑" if kapanis > ema200 else "↓"})
 
-            elif mod_secimi == "Çoklu Hisse Tarama" and strateji == "Senaryo Algoritması" and uyum_puani >= 50:
+
+            elif mod_secimi == "Çoklu Hisse Tarama" and uyum_puani >= 50:
                 gecici_bronz_liste.append({"sembol": sembol, "uyum": uyum_puani})
 
         # Tarama bitti, sonuçları HAFIZAYA kaydet (İndirme butonuna basınca silinmesin diye)
+        gecici_eslesenler.sort(key=lambda x: x['uyum'], reverse=True)
         st.session_state['eslesenler_hafiza'] = gecici_eslesenler
         st.session_state['bronz_hafiza'] = gecici_bronz_liste
+        st.session_state['hatali_hafiza'] = gecici_hatali
         durum_metni.empty()
         ilerleme_cubugu.empty()
 
@@ -701,12 +713,21 @@ else:
                         unsafe_allow_html=True
                     )
             st.markdown("---")
-
+        hatalilar = st.session_state.get('hatali_hafiza', [])
+            if hatalilar:
+                with st.expander(f"⚠️ Veri alınamayan hisseler ({len(hatalilar)})", expanded=(len(eslesenler) == 0 and len(hatalilar) <= 5)):
+                    st.caption("Yahoo Finance veri vermedi, hisse kodu/uzantısı hatalı veya 200 günden kısa işlem geçmişi var.")
+                    st.write(", ".join(hatalilar))
         if len(eslesenler) == 0:
             st.warning("⚠️ Seçtiğiniz kriterlere uygun hisse bulunamadı. Kriterleri esnetmeyi deneyin.")
         else:
             st.success(f"🎉 Tarama Tamamlandı! {len(eslesenler)} adet eşleşme bulundu.")
             
+            tablo_df = pd.DataFrame(eslesenler).drop(columns=["pdf"]).rename(columns={"sembol": "Hisse", "uyum": "Uyum %", "kapanis": "Kapanış", "rsi": "RSI", "mfi": "MFI", "adx": "ADX", "pddd": "PD/DD", "trend": "Trend"})
+            tablo_df["Uyum %"] = tablo_df["Uyum %"].round(1)
+            st.dataframe(tablo_df, use_container_width=True, hide_index=True)
+            st.download_button("📊 Özet Tabloyu CSV İndir", tablo_df.to_csv(index=False).encode("utf-8-sig"), "Borsa_Ozet.csv", "text/csv")
+
             if len(eslesenler) > 1:
                 zip_buffer = io.BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
@@ -739,7 +760,7 @@ else:
                 st.markdown("---")
                 
             if len(bronz_liste) > 0:
-                with st.expander("🔍 Kısmi Uyum Sağlayan Diğer Hisseler (%50 - %74)"):
+                with st.expander("🔍 Kısmi Uyum Sağlayan Diğer Hisseler (%50 ve üzeri, eşiğin altında)"):
                     st.info("Bu hisseler senaryoya yaklaşmış ancak henüz tam olgunlaşmamıştır.")
                     bronz_liste.sort(key=lambda x: x['uyum'], reverse=True)
                     for br in bronz_liste:

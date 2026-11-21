@@ -779,7 +779,7 @@ else:
                                           "mfi": round(float(son.get('MFI_14', 0)), 1), "adx": round(float(son.get('ADX_14', 0)), 1),
                                           "pddd": round(float(pd.to_numeric(temel.get('PD_DD'), errors='coerce')), 2),
                                           "trend": "↑" if kapanis > ema200 else "↓"})
-                    gecici_eslesenler[-1].update({"gorunum": f"{karne['ikon']} {karne['genel']}", "karne": karne, "grafik": df[['Close', 'EMA_200']].tail(252)})
+                gecici_eslesenler[-1].update({"gorunum": f"{karne['ikon']} {karne['genel']}", "karne": karne, "grafik": df[['Close', 'EMA_200']].tail(252)})
 
             elif mod_secimi == "Çoklu Hisse Tarama" and uyum_puani >= 50:
                 gecici_bronz_liste.append({"sembol": sembol, "uyum": uyum_puani})

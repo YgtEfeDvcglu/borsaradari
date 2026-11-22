@@ -3,4 +3,4 @@ yfinance>=0.2.37
 pandas_ta
 pandas
 matplotlib
-
+lxml

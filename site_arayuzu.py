@@ -743,18 +743,23 @@ if mod_secimi == "Çoklu Hisse Tarama":
     strateji = st.sidebar.radio("Yöntem:", ["Lütfen Seçiniz...", "Senaryo Algoritması", "Risk Profili", "Manuel Kriterler"])
     
     alt_secim = None
-    rsi_sinir = mfi_sinir = pddd_sinir = adx_sinir = 0
+    rsi_aralik = mfi_aralik = adx_aralik = (0.0, 100.0)
+    pddd_min, pddd_max = 0.0, (5.0 if abd_modu else 2.0)
     if strateji == "Senaryo Algoritması":
         alt_secim = st.sidebar.radio("📌 Alt Kategori:", ["a. Yay Gevşemesi", "b. Roket Kalkışı", "c. Yorgunluk Sinyali", "d. Ucuzluk Tuzağı", "e. Güvenli Liman"])
     elif strateji == "Risk Profili":
         alt_secim = st.sidebar.slider("Risk İştahınız (0: Güvenli, 100: Agresif)", 0, 100, 50)
     elif strateji == "Manuel Kriterler":
         st.sidebar.info("👉 Sağ taraftan tavsiye edilen Filtre Stratejilerini görebilirsiniz.")
-        st.sidebar.markdown("**Manuel Sınırlar**")
-        rsi_sinir = st.sidebar.number_input("RSI Sınırı (Altında)", value=45.0)
-        mfi_sinir = st.sidebar.number_input("MFI Sınırı (Altında)", value=45.0)
-        pddd_sinir = st.sidebar.number_input("PD/DD Sınırı (Altında)", value=5.0 if abd_modu else 2.0)
-        adx_sinir = st.sidebar.number_input("ADX Sınırı (Üstünde)", value=20.0)
+        st.sidebar.markdown("**Manuel Aralıklar (Min - Max)**")
+        rsi_aralik = st.sidebar.slider("RSI Aralığı", 0.0, 100.0, (0.0, 45.0), step=1.0)
+        mfi_aralik = st.sidebar.slider("MFI Aralığı", 0.0, 100.0, (0.0, 45.0), step=1.0)
+        adx_aralik = st.sidebar.slider("ADX Aralığı", 0.0, 100.0, (20.0, 100.0), step=1.0)
+        p_col1, p_col2 = st.sidebar.columns(2)
+        pddd_min = p_col1.number_input("PD/DD Min", value=0.0, step=0.1, key=f"pddd_min_{abd_modu}")
+        pddd_max = p_col2.number_input("PD/DD Max", value=5.0 if abd_modu else 2.0, step=0.1, key=f"pddd_max_{abd_modu}")
+        if pddd_min > pddd_max:
+            st.sidebar.warning("⚠️ PD/DD Min değeri Max değerinden büyük olamaz.")
 
     uyum_esigi = st.sidebar.slider("🎚️ Minimum Uyum Eşiği (%)", 50, 100, 75, step=5, help="Düşürürsen daha fazla hisse eşleşir, yükseltirsen daha seçici olur.")
 
@@ -795,6 +800,10 @@ if baslat and mod_secimi == "Çoklu Hisse Tarama" and strateji == "Lütfen Seçi
     st.sidebar.warning("⚠️ Önce bir strateji seçiniz.")
     baslat = False
 
+if baslat and mod_secimi == "Çoklu Hisse Tarama" and strateji == "Manuel Kriterler" and pddd_min > pddd_max:
+    st.sidebar.warning("⚠️ PD/DD Min değeri Max değerinden büyük olamaz.")
+    baslat = False
+    
 if baslat and mod_secimi == "Karşılaştırma":
     st.session_state['kars_kodlar'] = kars_kodlar
 
@@ -925,13 +934,13 @@ elif not baslat and not arama_gecmisi_var:
             st.markdown(
                 "**1. Dip Avcısı (Yüksek Risk):**<br>"
                 "Panikle satılan ucuz hisseler.<br>"
-                "*(RSI: <35 | MFI: <30 | PD/DD: <2 | ADX: >25)*<br><br>"
+                "*(RSI: 0–35 | MFI: 0–30 | PD/DD: 0–2 | ADX: 25–100)*<br><br>"
                 "**2. Dengeli Trend (Orta Risk):**<br>"
                 "Arkasına güçlü trend almış istikrarlı hisseler.<br>"
-                "*(RSI: <55 | MFI: <50 | PD/DD: <4 | ADX: >20)*<br><br>"
+                "*(RSI: 40–60 | MFI: 35–60 | PD/DD: 0–4 | ADX: 20–50)*<br><br>"
                 "**3. Değer Yatırımcısı (Düşük Risk):**<br>"
                 "Teknik coşkudan ziyade ucuzluğa odaklanır.<br>"
-                "*(RSI: <45 | MFI: <45 | PD/DD: <1.5 | ADX: >15)*",
+                "*(RSI: 25–50 | MFI: 25–50 | PD/DD: 0–1.5 | ADX: 15–40)*",
                 unsafe_allow_html=True
             )
 
@@ -1032,15 +1041,14 @@ else:
 
                 elif strateji == "Manuel Kriterler":
                     son = df.iloc[-1]
-                    rsi_val = son.get('RSI_14', 50); mfi_val = son.get('MFI_14', 50); adx_val = son.get('ADX_14', 0); pddd = temel.get('PD_DD', 10)
+                    rsi_val = son.get('RSI_14', 50); mfi_val = son.get('MFI_14', 50); adx_val = son.get('ADX_14', 0); pddd = temel.get('PD_DD', 'Bilinmiyor')
                     puan = 0
-                    if rsi_val < rsi_sinir: puan += 1
-                    if mfi_val < mfi_sinir: puan += 2
-                    if adx_val > adx_sinir: puan += 1
-                    if isinstance(pddd, (int, float)) and pddd < pddd_sinir: puan += 2
-                    if temel.get('mevsimsel_pozitif'): puan += 1
-                    uyum_puani = (puan / 7.0) * 100 
-                    senaryo_adi = f"Manuel Kriter Eşleşmesi (Puan: {puan}/7)"
+                    if rsi_aralik[0] <= rsi_val <= rsi_aralik[1]: puan += 1
+                    if mfi_aralik[0] <= mfi_val <= mfi_aralik[1]: puan += 1
+                    if adx_aralik[0] <= adx_val <= adx_aralik[1]: puan += 1
+                    if isinstance(pddd, (int, float)) and pddd_min <= pddd <= pddd_max: puan += 1
+                    uyum_puani = (puan / 4.0) * 100
+                    senaryo_adi = f"Manuel Kriter Eşleşmesi (Puan: {puan}/4)"
             else:
                 uyum_puani = 100
                 senaryo_adi = "Tekli İnceleme"
@@ -1158,13 +1166,13 @@ else:
                     st.markdown(
                         "**1. Dip Avcısı (Yüksek Risk):**<br>"
                         "Panikle satılan ucuz hisseler.<br>"
-                        "*(RSI: <35 | MFI: <30 | PD/DD: <2 | ADX: >25)*<br><br>"
+                        "*(RSI: 0–35 | MFI: 0–30 | PD/DD: 0–2 | ADX: 25–100)*<br><br>"
                         "**2. Dengeli Trend (Orta Risk):**<br>"
                         "Arkasına güçlü trend almış istikrarlı hisseler.<br>"
-                        "*(RSI: <55 | MFI: <50 | PD/DD: <4 | ADX: >20)*<br><br>"
+                        "*(RSI: 40–60 | MFI: 35–60 | PD/DD: 0–4 | ADX: 20–50)*<br><br>"
                         "**3. Değer Yatırımcısı (Düşük Risk):**<br>"
                         "Teknik coşkudan ziyade ucuzluğa odaklanır.<br>"
-                        "*(RSI: <45 | MFI: <45 | PD/DD: <1.5 | ADX: >15)*",
+                        "*(RSI: 25–50 | MFI: 25–50 | PD/DD: 0–1.5 | ADX: 15–40)*",
                         unsafe_allow_html=True
                     )
             st.markdown("---")

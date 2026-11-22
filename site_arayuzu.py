@@ -8,6 +8,9 @@ import datetime
 import textwrap
 import io
 import zipfile
+import time
+import altair as alt
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from matplotlib.backends.backend_pdf import PdfPages
 import warnings
 warnings.filterwarnings('ignore')
@@ -102,8 +105,8 @@ bist_listesi = [
     "TDGYO.IS", "TGSAS.IS", "TLMAN.IS", "TMPOL.IS", "TRGYO.IS", "TRILC.IS", "TUCLK.IS", "UFUK.IS", "ULAS.IS", "ULUFA.IS",
     "UNLU.IS", "YAPRK.IS", "YBTAS.IS", "YESIL.IS", "GOZDE.IS", "NTHOL.IS", "KLKIM.IS", "ARFYE.IS", "ATATR.IS", "BESTE.IS", "FRMPL.IS", "MEYSU.IS", "NETCD.IS", "UCAYM.IS", "ZGYO.IS"
 ]
-@st.cache_data(ttl=900, show_spinner=False)
-def hisse_verileri_getir(sembol):
+
+def _hisse_ham(sembol):
     try:
         hisse = yf.Ticker(sembol)
         df = hisse.history(period="3y", interval="1d")
@@ -125,14 +128,30 @@ def hisse_verileri_getir(sembol):
             info = hisse.info
             # PD/DD için Yahoo'nun kullanabileceği alternatif anahtarları sırayla deniyoruz:
             pddd = info.get('priceToBook') or info.get('trailingPriceToBook') or info.get('forwardPriceToBook') or 'Bilinmiyor'
-            borc = info.get('netDebtToEbitda', 'Bilinmiyor')
+            borc = _net_borc_favok(info)
+            ham = {a: info.get(a) for a in HAM_ANAHTARLAR}
         except Exception as e:
-            pddd, borc = 'Bilinmiyor', 'Bilinmiyor'
+            pddd, borc, ham = 'Bilinmiyor', 'Bilinmiyor', {}
 
-        temel = {'PD_DD': pddd, 'Borc_FAVOK': borc, 'VWAP_Col': vwap_col, 'mevsimsel_pozitif': False}
+        temel = {'PD_DD': pddd, 'Borc_FAVOK': borc, 'VWAP_Col': vwap_col, 'mevsimsel_pozitif': False,
+                 'ham': ham, 'pddd_k': pddd_k(sembol), 'para': para_birimi(sembol)}
         return df, temel
     except Exception as e:
         return None, None
+
+@st.cache_resource
+def veri_havuzu():
+    return {}
+
+def hisse_verileri_getir(sembol, havuz=None):
+    if havuz is not None:
+        kayit = havuz.get(sembol)
+        if kayit and time.time() - kayit[0] < 900:  # 15 dakika önbellek (başarısız çekimler saklanmaz)
+            return kayit[1]
+    sonuc = _hisse_ham(sembol)
+    if havuz is not None and sonuc[0] is not None:
+        havuz[sembol] = (time.time(), sonuc)
+    return sonuc
 
 def uyum_hesapla(deger, hedef, esik, yon="dusuk"):
     if deger is None or (isinstance(deger, str) and deger == 'Bilinmiyor'): return 0.0
@@ -151,7 +170,7 @@ def uyum_hesapla(deger, hedef, esik, yon="dusuk"):
 def senaryo_yuzde_tespit(df, temel, secilen_senaryo):
     son = df.iloc[-1]
     rsi = son.get('RSI_14', 50); mfi = son.get('MFI_14', 50); adx = son.get('ADX_14', 0)
-    pddd = temel.get('PD_DD', 99); kapanis = son['Close']; ema200 = son.get('EMA_200', kapanis)
+    pddd = temel.get('PD_DD', 99); kapanis = son['Close']; ema200 = son.get('EMA_200', kapanis); k = temel.get('pddd_k', 1.0)
     ema_fark = abs(kapanis - ema200) / ema200
 
     uyum1 = uyum2 = 0; baslik = ""
@@ -169,21 +188,95 @@ def senaryo_yuzde_tespit(df, temel, secilen_senaryo):
         uyum2 = uyum_hesapla(mfi, hedef=80, esik=65, yon="yuksek")
         baslik = "Yorgunluk Sinyali (Zirve)"
     elif secilen_senaryo == 'd': 
-        uyum1 = uyum_hesapla(pddd, hedef=0.7, esik=1.5, yon="dusuk")
+        uyum1 = uyum_hesapla(pddd, hedef=0.7 * k, esik=1.5 * k, yon="dusuk")
         uyum2 = uyum_hesapla(adx, hedef=40, esik=25, yon="yuksek")
         baslik = "Ucuzluk Tuzağı (Trap)"
     elif secilen_senaryo == 'e': 
-        uyum1 = uyum_hesapla(pddd, hedef=1.0, esik=2.0, yon="dusuk")
+        uyum1 = uyum_hesapla(pddd, hedef=1.0 * k, esik=2.0 * k, yon="dusuk")
         uyum2 = uyum_hesapla(ema_fark, hedef=0.01, esik=0.05, yon="dusuk")
         baslik = "Güvenli Liman (Value)"
 
     if uyum1 < 50 or uyum2 < 50: return 0.0, baslik
     return (uyum1 + uyum2) / 2.0, baslik
-@st.cache_data(ttl=900, show_spinner=False)
-def endeks_getir():
+
+ABD_YEDEK_LISTE = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B", "JPM", "V", "UNH", "XOM", "JNJ", "WMT", "PG",
+                   "MA", "HD", "COST", "AVGO", "LLY", "CVX", "KO", "PEP", "ABBV", "MRK", "BAC", "ORCL", "CRM", "NFLX", "AMD"]
+ABD_KAYNAKLAR = {
+    "S&P 500": ["https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"],
+    "S&P 400 (orta ölçekli)": ["https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"],
+    "S&P 500 + S&P 400": ["https://en.wikipedia.org/wiki/List_of_S%26P_500_companies", "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"],
+}
+HAM_ANAHTARLAR = ['sector', 'industry', 'currency', 'marketCap', 'priceToBook', 'trailingPE', 'forwardPE', 'totalDebt', 'totalCash',
+                  'ebitda', 'targetMeanPrice', 'recommendationKey', 'numberOfAnalystOpinions']
+MAKS_ISCI = 6  # aynı anda kaç hisse indirilsin (Yahoo hız sınırı koyarsa düşür)
+
+@st.cache_data(ttl=86400, show_spinner="ABD hisse listesi alınıyor...")
+def abd_evreni_getir(kaynak):
+    import requests
+    sonuc = {}
+    for url in ABD_KAYNAKLAR[kaynak]:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (BorsaRadari)"}, timeout=20)
+        r.raise_for_status()
+        for t in pd.read_html(io.StringIO(r.text)):
+            if "Symbol" in t.columns and "GICS Sector" in t.columns:
+                for s, sek in zip(t["Symbol"], t["GICS Sector"]):
+                    sonuc.setdefault(str(s).strip().replace(".", "-"), str(sek))
+                break
+    if len(sonuc) < 50:
+        raise ValueError("ABD listesi çekilemedi")
+    return sonuc
+
+def para_birimi(sembol):
+    for uz, p in ((".IS", "TL"), (".DE", "€"), (".L", "GBp"), (".HK", "HK$"), (".SS", "¥")):
+        if sembol.endswith(uz): return p
+    return "$"
+
+def pdf_para(sembol):
+    return {"$": "USD", "HK$": "HKD"}.get(para_birimi(sembol), para_birimi(sembol))
+
+def pddd_k(sembol):
+    # PD/DD eşiklerinin çarpanı: BIST için 1, diğer piyasalar için 2.5 (başlangıç tahmini, kendi görüşüne göre ayarla)
+    return 1.0 if sembol.endswith(".IS") else 2.5
+
+def _net_borc_favok(info):
+    if str(info.get('sector', '')) == 'Financial Services':
+        return 'Finans (geçersiz)'
     try:
-        e = yf.Ticker("XU100.IS").history(period="1y", interval="1d")
+        favok, borc = float(info.get('ebitda')), info.get('totalDebt')
+        if borc is not None and favok > 0:
+            return round((float(borc) - float(info.get('totalCash') or 0)) / favok, 2)
+    except (TypeError, ValueError):
+        pass
+    return 'Bilinmiyor'
+
+def endeks_kodu(sembol):
+    if sembol.endswith(".IS"): return "XU100.IS", "BIST 100"
+    if "." not in sembol and not sembol.startswith("^"): return "^GSPC", "S&P 500"
+    return None, None
+
+@st.cache_data(ttl=900, show_spinner=False)
+def endeks_getir(kod):
+    try:
+        e = yf.Ticker(kod).history(period="1y", interval="1d")
         return e if not e.empty else None
+    except Exception:
+        return None
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def usdtry_getir():
+    try:
+        e = yf.Ticker("USDTRY=X").history(period="1y", interval="1d")
+        return e if not e.empty else None
+    except Exception:
+        return None
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def bilanco_tarihi(sembol):
+    try:
+        cal = yf.Ticker(sembol).calendar
+        tarihler = cal.get('Earnings Date') if isinstance(cal, dict) else None
+        gelecek = [pd.Timestamp(t).date() for t in (tarihler or []) if pd.Timestamp(t).date() >= datetime.date.today()]
+        return min(gelecek) if gelecek else None
     except Exception:
         return None
 
@@ -205,13 +298,74 @@ def gecmis_sinyal_testi(df, harf):
     for h in (5, 10, 20):
         ileri = (df['Close'].shift(-h) / df['Close'] - 1) * 100
         ornek = ileri.iloc[secilen].dropna()
-        sonuc[h] = {"n": len(ornek), "ort": ornek.mean(), "pozitif": (ornek > 0).mean() * 100, "genel": ileri.mean()}
+        sonuc[h] = {"n": len(ornek), "ort": ornek.mean(), "pozitif": (ornek > 0).mean() * 100, "genel": ileri.mean(),
+                    "toplam": ornek.sum(), "poz_n": (ornek > 0).sum(), "genel_n": ileri.count(), "genel_top": ileri.sum()}
     return sonuc
+
+def strateji_acc_olustur():
+    return {x: {h: {"n": 0, "top": 0.0, "poz": 0, "gn": 0, "gtop": 0.0} for h in (5, 10, 20)} for x in "abc"}
+
+def strateji_topla(df, acc):
+    for x in "abc":
+        t = gecmis_sinyal_testi(df, x)
+        for h in (5, 10, 20):
+            a = acc[x][h]
+            a["n"] += int(t[h]["n"]); a["top"] += float(t[h]["toplam"]); a["poz"] += int(t[h]["poz_n"])
+            a["gn"] += int(t[h]["genel_n"]); a["gtop"] += float(t[h]["genel_top"])
+
+def strateji_tablosu(acc):
+    satirlar = []
+    for x, ad in {"a": "Yay Gevşemesi", "b": "Roket Kalkışı", "c": "Yorgunluk Sinyali"}.items():
+        def ort(a): return float('nan') if a["n"] == 0 else a["top"] / a["n"]
+        a5, a10, a20 = acc[x][5], acc[x][10], acc[x][20]
+        piyasa = a10["gtop"] / a10["gn"] if a10["gn"] else float('nan')
+        satirlar.append({"Senaryo": ad, "Toplam sinyal": a10["n"], "5g ort.": _yz(ort(a5)), "10g ort.": _yz(ort(a10)), "20g ort.": _yz(ort(a20)),
+                         "10g yükseliş oranı": (f"%{a10['poz'] / a10['n'] * 100:.0f}" if a10["n"] >= 10 else "—"),
+                         "Piyasa 10g ort.": _yz(piyasa), "Fark (puan)": ("—" if a10["n"] == 0 or piyasa != piyasa else f"{ort(a10) - piyasa:+.1f}")})
+    return satirlar
+
+def destek_direnc(df, pencere=8, tolerans=0.02):
+    d = df.tail(252)
+    ust, alt, n = d['High'].tolist(), d['Low'].tolist(), len(d)
+    pivotlar = []
+    for i in range(pencere, n - pencere):
+        if ust[i] == max(ust[i - pencere:i + pencere + 1]): pivotlar.append(ust[i])
+        if alt[i] == min(alt[i - pencere:i + pencere + 1]): pivotlar.append(alt[i])
+    kume = []
+    for p in sorted(pivotlar):
+        if kume and p <= kume[-1][0] * (1 + tolerans): kume[-1].append(p)
+        else: kume.append([p])
+    seviyeler = [(sum(k) / len(k), len(k)) for k in kume]
+    kap = float(d['Close'].iloc[-1])
+    destek = sorted([s for s in seviyeler if s[0] < kap], key=lambda s: kap - s[0])[:3]
+    direnc = sorted([s for s in seviyeler if s[0] > kap], key=lambda s: s[0] - kap)[:3]
+    return destek, direnc
+
+def grafik_ciz(g, destek, direnc):
+    g = g.copy()
+    g.insert(0, "Tarih", g.index.tz_localize(None) if getattr(g.index, "tz", None) is not None else g.index)
+    g = g.reset_index(drop=True)
+    g["Renk"] = ["#26a69a" if c >= o else "#ef5350" for o, c in zip(g["Open"], g["Close"])]
+    taban = alt.Chart(g).encode(x=alt.X("Tarih:T", title=None))
+    olcek = alt.Scale(zero=False)
+    fitil = taban.mark_rule().encode(y=alt.Y("Low:Q", scale=olcek, title="Fiyat"), y2="High:Q", color=alt.Color("Renk:N", scale=None))
+    govde = taban.mark_bar(size=3).encode(y=alt.Y("Open:Q", scale=olcek), y2="Close:Q", color=alt.Color("Renk:N", scale=None),
+                                          tooltip=["Tarih:T", "Open:Q", "High:Q", "Low:Q", "Close:Q"])
+    ema = taban.mark_line(color="#ff7f0e", strokeDash=[4, 3]).encode(y=alt.Y("EMA_200:Q", scale=olcek))
+    katmanlar = [fitil, govde, ema]
+    sev = pd.DataFrame([{"Fiyat": f, "Etiket": f"Destek {f:.2f} ({t} temas)", "Renk": "#26a69a"} for f, t in destek] +
+                       [{"Fiyat": f, "Etiket": f"Direnç {f:.2f} ({t} temas)", "Renk": "#ef5350"} for f, t in direnc])
+    if len(sev):
+        katmanlar.append(alt.Chart(sev).mark_rule(strokeDash=[6, 4], opacity=0.8).encode(y=alt.Y("Fiyat:Q", scale=olcek), color=alt.Color("Renk:N", scale=None)))
+        katmanlar.append(alt.Chart(sev).mark_text(align="left", dx=4, dy=-6, fontSize=11).encode(x=alt.value(6), y=alt.Y("Fiyat:Q", scale=olcek), text="Etiket:N", color=alt.Color("Renk:N", scale=None)))
+    st.altair_chart(alt.layer(*katmanlar).properties(height=380).interactive(), use_container_width=True)
+    st.caption("Mum grafiği (yeşil: yükseliş, kırmızı: düşüş), turuncu kesikli çizgi: EMA200. Destek/direnç çizgileri son 1 yıldaki tepe/dip kümelerinden otomatik bulunur; kesin değil, yaklaşık seviyelerdir.")
 
 def hisse_karnesi(df, temel, sembol):
     son = df.iloc[-1]
     kap = float(son['Close']); rsi = float(son.get('RSI_14', 50)); mfi = float(son.get('MFI_14', 50)); adx = float(son.get('ADX_14', 0))
     ema = float(son.get('EMA_200', kap))
+    para = temel.get('para', '')
     y = []
 
     # 1) Ana trend
@@ -245,9 +399,14 @@ def hisse_karnesi(df, temel, sembol):
 
     # 5) 52 haftalık konum
     yil = df.tail(252)
-    ust, alt = float(yil['High'].max()), float(yil['Low'].min())
-    if ust > alt > 0:
-        y.append(("📏", f"52 haftalık aralıkta konum: %{(kap - alt) / (ust - alt) * 100:.0f} (0=dip, 100=zirve). Zirveye uzaklık %{(kap / ust - 1) * 100:.1f}, dipten uzaklık %{(kap / alt - 1) * 100:+.1f}."))
+    ust, alt_ = float(yil['High'].max()), float(yil['Low'].min())
+    if ust > alt_ > 0:
+        y.append(("📏", f"52 haftalık aralıkta konum: %{(kap - alt_) / (ust - alt_) * 100:.0f} (0=dip, 100=zirve). Zirveye uzaklık %{(kap / ust - 1) * 100:.1f}, dipten uzaklık %{(kap / alt_ - 1) * 100:+.1f}."))
+
+    # 5b) Destek / direnç
+    destek, direnc = destek_direnc(df)
+    if direnc: y.append(("🔼", f"En yakın direnç: {direnc[0][0]:.2f} {para} (%{(direnc[0][0] / kap - 1) * 100:+.1f}, {direnc[0][1]} temas)."))
+    if destek: y.append(("🔽", f"En yakın destek: {destek[0][0]:.2f} {para} (%{(destek[0][0] / kap - 1) * 100:+.1f}, {destek[0][1]} temas)."))
 
     # 6) Hacim ilgisi
     v5, v25 = float(df['Volume'].tail(5).mean()), float(df['Volume'].tail(25).mean())
@@ -260,21 +419,23 @@ def hisse_karnesi(df, temel, sembol):
     atr = float(tr.tail(14).mean()) / kap * 100
     y.append(("🌊", f"Günlük ortalama hareket aralığı (ATR) ≈ %{atr:.1f}: oynaklık {'yüksek' if atr > 4 else ('orta' if atr > 2.5 else 'düşük')}."))
 
-    # 8) Endekse göre güç (sadece BIST hisseleri)
-    if sembol.endswith(".IS"):
-        e = endeks_getir()
+    # 8) Endekse göre güç
+    kod, ad = endeks_kodu(sembol)
+    if kod:
+        e = endeks_getir(kod)
         if e is not None and len(e) > 64 and len(df) > 64:
             h3 = (kap / float(df['Close'].iloc[-64]) - 1) * 100
             e3 = (float(e['Close'].iloc[-1]) / float(e['Close'].iloc[-64]) - 1) * 100
-            y.append(("🏁", f"Son ~3 ayda hisse %{h3:+.1f}, BIST 100 %{e3:+.1f}: endeksin {'önünde' if h3 > e3 else 'gerisinde'} ({h3 - e3:+.1f} puan)."))
+            y.append(("🏁", f"Son ~3 ayda hisse %{h3:+.1f}, {ad} %{e3:+.1f}: endeksin {'önünde' if h3 > e3 else 'gerisinde'} ({h3 - e3:+.1f} puan)."))
 
-    # 9) Değerleme
+    # 9) Değerleme (eşikler piyasaya göre ölçeklenir)
+    k = temel.get('pddd_k', 1.0)
     try:
         p = float(temel.get('PD_DD', 'Bilinmiyor'))
         if p <= 0: y.append(("💰", "PD/DD negatif: özsermaye negatif olabilir, bilançoyu kontrol et."))
-        elif p < 1: y.append(("💰", f"PD/DD {p:.2f}: defter değerinin altında işlem görüyor (ucuz görünüm; nedenini araştır)."))
-        elif p < 2: y.append(("💰", f"PD/DD {p:.2f}: makul seviyede."))
-        elif p < 4: y.append(("💰", f"PD/DD {p:.2f}: defter değerine göre pahalılaşmış."))
+        elif p < 1 * k: y.append(("💰", f"PD/DD {p:.2f}: defter değerine göre ucuz görünüm (nedenini araştır)."))
+        elif p < 2 * k: y.append(("💰", f"PD/DD {p:.2f}: makul seviyede."))
+        elif p < 4 * k: y.append(("💰", f"PD/DD {p:.2f}: defter değerine göre pahalılaşmış."))
         else: y.append(("💰", f"PD/DD {p:.2f}: defter değerine göre pahalı."))
     except (TypeError, ValueError):
         pass
@@ -302,19 +463,97 @@ def hisse_karnesi(df, temel, sembol):
     skor = (1 if kap > ema else -1) + (1 if egim > 0 else -1) + (1 if rsi >= 50 else -1) + (1 if mfi >= 50 else -1)
     if adx >= 25: skor += 1 if kap > ema else -1
     genel, ikon = ("Olumlu", "🟢") if skor >= 3 else (("Zayıf", "🔴") if skor <= -3 else ("Kararsız", "🟡"))
-    return {"genel": genel, "ikon": ikon, "skor": skor, "yorumlar": y, "tablo": tablo}
+    return {"genel": genel, "ikon": ikon, "skor": skor, "yorumlar": y, "tablo": tablo, "destek": destek, "direnc": direnc}
 
-def karne_goster(k, grafik):
+def ek_satirlar(sembol, temel, grafik):
+    s = []
+    ham = temel.get('ham') or {}
+    para = temel.get('para', '')
+    kap = float(grafik['Close'].iloc[-1])
+    if ham.get('sector'):
+        s.append(("🏭", f"Sektör: {ham.get('sector')}" + (f" / {ham.get('industry')}" if ham.get('industry') else "")))
+    b = temel.get('Borc_FAVOK')
+    if isinstance(b, (int, float)):
+        s.append(("🏦", f"Net borç/FAVÖK {b:.2f}: " + ("net nakit pozisyonu." if b < 0 else ("borç yükü güvenli bölgede." if b < 3 else ("borç yükü dikkat çekiyor." if b < 5 else "borç yükü yüksek.")))))
+    elif isinstance(b, str) and 'geçersiz' in b:
+        s.append(("🏦", "Net borç/FAVÖK finans şirketlerinde (banka, sigorta vb.) anlamlı bir ölçüt değildir."))
+    try:
+        hedef = ham.get('targetMeanPrice')
+        if hedef:
+            s.append(("🎯", f"Analist ortalama hedef fiyatı {float(hedef):.2f} {para} (güncel fiyata göre %{(float(hedef) / kap - 1) * 100:+.1f}); öneri: {ham.get('recommendationKey', '-')} ({ham.get('numberOfAnalystOpinions', '?')} analist)."))
+    except (TypeError, ValueError):
+        pass
+    t = bilanco_tarihi(sembol)
+    if t:
+        gun = (t - datetime.date.today()).days
+        if gun <= 90:
+            s.append(("⚠️" if gun <= 7 else "📅", f"Sonraki bilanço: {t:%d.%m.%Y} ({gun} gün sonra)." + (" Bilanço öncesinde teknik sinyaller güvenilmez olabilir." if gun <= 7 else "")))
+    if sembol.endswith(".IS"):
+        fx = usdtry_getir()
+        if fx is not None:
+            try:
+                g = grafik['Close'].copy(); g.index = g.index.tz_localize(None).normalize()
+                f = fx['Close'].copy(); f.index = f.index.tz_localize(None).normalize()
+                usd = (g / f.reindex(g.index, method='ffill')).dropna()
+                if len(usd) > 64:
+                    s.append(("💵", f"Dolar bazında son ~3 ay: %{(usd.iloc[-1] / usd.iloc[-64] - 1) * 100:+.1f} (TL bazında %{(g.iloc[-1] / g.iloc[-64] - 1) * 100:+.1f})."))
+            except Exception:
+                pass
+    return s
+
+def karne_goster(k, grafik, sembol, temel):
     st.markdown(f"#### {k['ikon']} Genel Teknik Görünüm: **{k['genel']}** (skor {k['skor']:+d} / ±5)")
-    for ikon, metin in k['yorumlar']:
+    for ikon, metin in k['yorumlar'] + ek_satirlar(sembol, temel, grafik):
         st.markdown(f"{ikon} {metin}")
     st.markdown("**🧪 Bu hissede senaryolar geçmişte nasıl çalıştı? (son 3 yıl)**")
     st.dataframe(pd.DataFrame(k['tablo']), use_container_width=True, hide_index=True)
     st.caption("Aynı olayı tekrar saymamak için sinyaller arasında en az 10 işlem günü bırakılır. Örneklem küçükse (5'ten az) sonuçlara güvenmeyin. Geçmiş performans gelecek için garanti değildir; yatırım tavsiyesi değildir.")
-    st.line_chart(grafik)
-    
+    grafik_ciz(grafik, k.get('destek', []), k.get('direnc', []))
+    with st.expander("🔎 Yahoo'dan gelen ham veri (veri kalitesi kontrolü)"):
+        ham = temel.get('ham') or {}
+        st.dataframe(pd.DataFrame({"Alan": list(HAM_ANAHTARLAR), "Değer": [("— (gelmedi)" if ham.get(a) is None else str(ham.get(a))) for a in HAM_ANAHTARLAR]}), hide_index=True, use_container_width=True)
+
+def karsilastir_goster(kodlar):
+    if len(kodlar) < 2:
+        st.warning("⚠️ Karşılaştırma için en az 2 hisse kodu girin (örn. THYAO.IS, PGSUS.IS).")
+        return
+    havuz = veri_havuzu()
+    veriler, hatali = {}, []
+    for s in kodlar:
+        df, temel = hisse_verileri_getir(s, havuz)
+        if df is None: hatali.append(s)
+        else: veriler[s] = (df, temel)
+    if hatali:
+        st.warning(f"⚠️ Veri alınamayan hisseler: {', '.join(hatali)}")
+    if len(veriler) < 2:
+        return
+    st.subheader("⚖️ Hisse Karşılaştırması")
+    seriler = {}
+    for s, (df, _) in veriler.items():
+        c = df['Close'].tail(252).copy()
+        c.index = c.index.tz_localize(None).normalize()
+        seriler[s] = c
+    birlesik = pd.concat(seriler, axis=1).sort_index().ffill().dropna()
+    if len(birlesik) > 1:
+        st.markdown("**Son 1 yıl, başlangıç = 100** (farklı piyasalarda yalnızca yüzde değişim karşılaştırılır)")
+        st.line_chart(birlesik / birlesik.iloc[0] * 100)
+    satirlar = []
+    for s, (df, temel) in veriler.items():
+        k = hisse_karnesi(df, temel, s)
+        son = df.iloc[-1]; kap = float(son['Close']); ema = float(son.get('EMA_200', kap))
+        satirlar.append({"Hisse": s, "Kapanış": round(kap, 2), "3 ay %": round((kap / float(df['Close'].iloc[-64]) - 1) * 100, 1),
+                         "1 yıl %": round((kap / float(df['Close'].iloc[-253]) - 1) * 100, 1) if len(df) > 253 else float('nan'),
+                         "RSI": round(float(son.get('RSI_14', 0)), 1), "MFI": round(float(son.get('MFI_14', 0)), 1), "ADX": round(float(son.get('ADX_14', 0)), 1),
+                         "EMA200 farkı %": round((kap / ema - 1) * 100, 1), "PD/DD": round(float(pd.to_numeric(temel.get('PD_DD'), errors='coerce')), 2),
+                         "Görünüm": f"{k['ikon']} {k['genel']}"})
+    st.dataframe(pd.DataFrame(satirlar), use_container_width=True, hide_index=True)
+    if len(birlesik) > 30:
+        st.markdown("**Günlük getiri korelasyonu** (1'e yakın: birlikte hareket ediyorlar, 0'a yakın: bağımsız)")
+        st.dataframe(birlesik.pct_change().dropna().corr().round(2), use_container_width=True)
+
 def pdf_bellege_uret(df, sembol, temel, son, puan, ema_etiket, vwap_deger, rsi_val, mfi_val, adx_val, pddd, senaryo_adi, senaryo_metni, tepki_potansiyeli=0, karne=None):
     pdf_buffer = io.BytesIO()
+    PB = pdf_para(sembol)
     pdf = PdfPages(pdf_buffer)
     
     df_3m = df.tail(63)
@@ -341,7 +580,7 @@ def pdf_bellege_uret(df, sembol, temel, son, puan, ema_etiket, vwap_deger, rsi_v
 
     # Değerleri Yuvarlama ve Formatlama
     if isinstance(vwap_deger, float) or (isinstance(vwap_deger, str) and vwap_deger.replace('.','',1).isdigit()):
-        v_str = f"{float(vwap_deger):.2f} TL"
+        v_str = f"{float(vwap_deger):.2f} {PB}"
     else:
         v_str = str(vwap_deger)
 
@@ -356,7 +595,7 @@ def pdf_bellege_uret(df, sembol, temel, son, puan, ema_etiket, vwap_deger, rsi_v
     # 2. Satır
     y1 = 0.70
     ax_metin.text(c1_k, y1, "KAPANIŞ:", fontweight='bold', color='navy', fontsize=11, transform=ax_metin.transAxes)
-    ax_metin.text(c1_v, y1, f"{son['Close']:.2f} TL", fontsize=11, transform=ax_metin.transAxes)
+    ax_metin.text(c1_v, y1, f"{son['Close']:.2f} {PB}", fontsize=11, transform=ax_metin.transAxes)
     ax_metin.text(c2_k, y1, "RSI:", fontweight='bold', color='navy', fontsize=11, transform=ax_metin.transAxes)
     ax_metin.text(c2_v, y1, f"{rsi_val:.1f}", fontsize=11, transform=ax_metin.transAxes)
     ax_metin.text(c3_k, y1, "PD/DD:", fontweight='bold', color='navy', fontsize=11, transform=ax_metin.transAxes)
@@ -365,7 +604,7 @@ def pdf_bellege_uret(df, sembol, temel, son, puan, ema_etiket, vwap_deger, rsi_v
     # 3. Satır
     y2 = 0.52
     ax_metin.text(c1_k, y2, "EMA(200):", fontweight='bold', color='navy', fontsize=11, transform=ax_metin.transAxes)
-    ax_metin.text(c1_v, y2, f"{son.get('EMA_200', 0):.2f} TL", fontsize=11, transform=ax_metin.transAxes)
+    ax_metin.text(c1_v, y2, f"{son.get('EMA_200', 0):.2f} {PB}", fontsize=11, transform=ax_metin.transAxes)
     ax_metin.text(c2_k, y2, "MFI:", fontweight='bold', color='navy', fontsize=11, transform=ax_metin.transAxes)
     ax_metin.text(c2_v, y2, f"{mfi_val:.1f}", fontsize=11, transform=ax_metin.transAxes)
     ax_metin.text(c3_k, y2, "BORÇ/FAVÖK:", fontweight='bold', color='navy', fontsize=11, transform=ax_metin.transAxes)
@@ -401,7 +640,7 @@ def pdf_bellege_uret(df, sembol, temel, son, puan, ema_etiket, vwap_deger, rsi_v
         ax1.plot(df_3m.index, df_3m['EMA_200'], color='#ff7f0e', linestyle='--', linewidth=1.5, label='EMA 200 (Ana Trend)')
     ax1.legend(loc='upper left', frameon=True, shadow=True, fontsize=10)
     ax1.grid(True, which='both', linestyle='--', alpha=0.4)
-    ax1.set_ylabel("Fiyat (TL)", fontweight='bold')
+    ax1.set_ylabel(f"Fiyat ({PB})", fontweight='bold')
 
     ax2 = plt.subplot(gs1[2], sharex=ax1)
     ax2.bar(df_3m.index, df_3m['Volume'], color='#7f7f7f', alpha=0.7, label='İşlem Hacmi')
@@ -422,7 +661,7 @@ def pdf_bellege_uret(df, sembol, temel, son, puan, ema_etiket, vwap_deger, rsi_v
         ax3.plot(df_1y.index, df_1y['EMA_200'], color='#ff7f0e', linestyle='--', linewidth=1.5, label='EMA 200')
     ax3.legend(loc='upper left', frameon=True, shadow=True, fontsize=10)
     ax3.grid(True, linestyle='--', alpha=0.4)
-    ax3.set_ylabel("Fiyat (TL)", fontweight='bold')
+    ax3.set_ylabel(f"Fiyat ({PB})", fontweight='bold')
 
     ax4 = plt.subplot(gs2[1], sharex=ax3)
     ax4.bar(df_1y.index, df_1y['Volume'], color='#7f7f7f', alpha=0.7, label='İşlem Hacmi')
@@ -436,7 +675,7 @@ def pdf_bellege_uret(df, sembol, temel, son, puan, ema_etiket, vwap_deger, rsi_v
         ax5.plot(df_3y.index, df_3y['EMA_200'], color='#ff7f0e', linestyle='--', linewidth=1.8, label='EMA 200')
     ax5.legend(loc='upper left', frameon=True, shadow=True, fontsize=10)
     ax5.grid(True, linestyle='--', alpha=0.4)
-    ax5.set_ylabel("Fiyat (TL)", fontweight='bold')
+    ax5.set_ylabel(f"Fiyat ({PB})", fontweight='bold')
 
     ax6 = plt.subplot(gs2[3], sharex=ax5)
     ax6.bar(df_3y.index, df_3y['Volume'], color='#7f7f7f', alpha=0.7, label='İşlem Hacmi')
@@ -456,9 +695,9 @@ def pdf_bellege_uret(df, sembol, temel, son, puan, ema_etiket, vwap_deger, rsi_v
         satirlar += ["", "GEÇMİŞ SENARYO TESTİ (son 3 yıl):"]
         for s in karne['tablo']:
             satirlar += textwrap.wrap(" | ".join(f"{a}: {b}" for a, b in s.items()).replace("✅", "[AKTİF]"), width=115, subsequent_indent="    ")
-        ax_y.text(0.0, 0.97, "\n".join(satirlar), va='top', ha='left', fontsize=11, transform=ax_y.transAxes)
+        ax_y.text(0.0, 0.97, "\n".join(satirlar).replace("$", r"\$"), va='top', ha='left', fontsize=11, transform=ax_y.transAxes)
         pdf.savefig(fig3, bbox_inches='tight')
-        
+    
     pdf.close()
     plt.close('all')
     return pdf_buffer.getvalue()
@@ -467,16 +706,32 @@ def pdf_bellege_uret(df, sembol, temel, son, puan, ema_etiket, vwap_deger, rsi_v
 # BÖLÜM 2: YAN MENÜ (KUMANDA PANELİ)
 # ==============================================================================
 st.sidebar.title("⚙️ Kumanda Paneli")
-mod_secimi = st.sidebar.radio("Tarama Modu", ["Çoklu Hisse Tarama", "Tekli Hisse Tarama", "İzleme Listesi"])
+piyasa = st.sidebar.radio("Piyasa", ["🇹🇷 BIST", "🇺🇸 ABD"], horizontal=True)
+abd_modu = piyasa.endswith("ABD")
+sektor_haritasi = {}
+aktif_liste = bist_listesi
+if abd_modu:
+    abd_kaynak = st.sidebar.selectbox("ABD endeksi", list(ABD_KAYNAKLAR.keys()))
+    try:
+        sektor_haritasi = abd_evreni_getir(abd_kaynak)
+        aktif_liste = list(sektor_haritasi.keys())
+    except Exception:
+        aktif_liste = ABD_YEDEK_LISTE
+        st.sidebar.warning("⚠️ ABD hisse listesi çekilemedi, 30 hisselik yedek liste kullanılıyor.")
+mod_secimi = st.sidebar.radio("Tarama Modu", ["Çoklu Hisse Tarama", "Tekli Hisse Tarama", "İzleme Listesi", "Karşılaştırma"])
 
 tekli_sembol = ""
 uyum_esigi = 75
 if mod_secimi == "Çoklu Hisse Tarama":
-    toplam_sayi = len(bist_listesi)
+    toplam_sayi = len(aktif_liste)
+    _b = min(max(st.session_state['baslangic_degeri'], 1), toplam_sayi)
+    _e = min(max(st.session_state['bitis_degeri'], _b), toplam_sayi)
+    if (_b, _e) != (st.session_state['baslangic_degeri'], st.session_state['bitis_degeri']):
+        st.session_state['baslangic_degeri'], st.session_state['bitis_degeri'], st.session_state['aralik_slider'] = _b, _e, (_b, _e)
     st.sidebar.markdown("---")
     st.sidebar.subheader(f"📏 Arama Aralığı (1-{toplam_sayi})")
     
-    st.sidebar.markdown("<div style='color: #666; font-size: 13px; margin-bottom: 10px; line-height: 1.4;'>ℹ️ Çoklu tarama sadece Borsa İstanbul'da geçerlidir. Sisteme kayıtlı 500+ hisse arasından taramak istediğiniz aralığı aşağıdaki çubuktan veya kutucuklardan belirleyebilirsiniz.</div>", unsafe_allow_html=True)
+    st.sidebar.markdown("<div style='color: #666; font-size: 13px; margin-bottom: 10px; line-height: 1.4;'>ℹ️ Seçili piyasanın (BIST veya ABD endeksleri) sisteme kayıtlı hisseleri arasından taramak istediğiniz aralığı aşağıdaki çubuktan veya kutucuklardan belirleyebilirsiniz.</div>", unsafe_allow_html=True)
     
     st.sidebar.slider("Kaydırma Çubuğu", min_value=1, max_value=toplam_sayi, key='aralik_slider', on_change=slider_guncelle)
     # Mobilde sıkışmayı önlemek için sütunları kaldırdık, alt alta koyduk
@@ -498,11 +753,13 @@ if mod_secimi == "Çoklu Hisse Tarama":
         st.sidebar.markdown("**Manuel Sınırlar**")
         rsi_sinir = st.sidebar.number_input("RSI Sınırı (Altında)", value=45.0)
         mfi_sinir = st.sidebar.number_input("MFI Sınırı (Altında)", value=45.0)
-        pddd_sinir = st.sidebar.number_input("PD/DD Sınırı (Altında)", value=2.0)
+        pddd_sinir = st.sidebar.number_input("PD/DD Sınırı (Altında)", value=5.0 if abd_modu else 2.0)
         adx_sinir = st.sidebar.number_input("ADX Sınırı (Üstünde)", value=20.0)
+
     uyum_esigi = st.sidebar.slider("🎚️ Minimum Uyum Eşiği (%)", 50, 100, 75, step=5, help="Düşürürsen daha fazla hisse eşleşir, yükseltirsen daha seçici olur.")
+
 elif mod_secimi == "Tekli Hisse Tarama":
-    tekli_sembol = st.sidebar.text_input("Hisse Kodu Girin (Örn: THYAO.IS):", value="THYAO.IS").upper()
+    tekli_sembol = st.sidebar.text_input("Hisse Kodu Girin (Örn: THYAO.IS):", value="AAPL" if abd_modu else "THYAO.IS").upper()
     
     st.sidebar.markdown("""
     <div style='color: #666; font-size: 13px; margin-top: -10px; margin-bottom: 10px; line-height: 1.4;'>
@@ -516,6 +773,7 @@ elif mod_secimi == "Tekli Hisse Tarama":
     • <b>Hong Kong:</b> <code>.HK</code> (Örn: 0700.HK)
     </div>
     """, unsafe_allow_html=True)
+
 elif mod_secimi == "İzleme Listesi":
     if 'izleme_metni' not in st.session_state:
         st.session_state['izleme_metni'] = st.query_params.get("izleme", "THYAO.IS,ASELS.IS,KCHOL.IS").replace(",", ", ")
@@ -523,7 +781,11 @@ elif mod_secimi == "İzleme Listesi":
     izleme_listesi = list(dict.fromkeys(s.strip().upper() for s in st.session_state['izleme_metni'].replace("\n", ",").split(",") if s.strip()))
     st.query_params["izleme"] = ",".join(izleme_listesi)
     st.sidebar.caption("🔖 Tarayıcı adresi listenle birlikte güncellenir: sayfayı yer imine ekle, listen hep hazır olsun. Kodlara uzantıyı unutma (örn. THYAO.IS).")
-    
+
+elif mod_secimi == "Karşılaştırma":
+    kars_metni = st.sidebar.text_input("2-3 hisse kodu (virgülle ayırın):", value="AAPL, MSFT" if abd_modu else "THYAO.IS, PGSUS.IS")
+    kars_kodlar = list(dict.fromkeys(x.strip().upper() for x in kars_metni.split(",") if x.strip()))[:3]
+
 st.sidebar.markdown("---")
 buton_sutun1, buton_sutun2 = st.sidebar.columns(2)
 baslat = buton_sutun1.button("▶️ BAŞLAT", use_container_width=True)
@@ -532,6 +794,10 @@ durdur = buton_sutun2.button("🛑 DURDUR", use_container_width=True)
 if baslat and mod_secimi == "Çoklu Hisse Tarama" and strateji == "Lütfen Seçiniz...":
     st.sidebar.warning("⚠️ Önce bir strateji seçiniz.")
     baslat = False
+
+if baslat and mod_secimi == "Karşılaştırma":
+    st.session_state['kars_kodlar'] = kars_kodlar
+
 if durdur:
     # 1. Hafızadaki tüm eski tarama verilerini sil
     if 'eslesenler_hafiza' in st.session_state:
@@ -541,6 +807,7 @@ if durdur:
     if 'hatali_hafiza' in st.session_state:
         del st.session_state['hatali_hafiza']
         
+    st.session_state.pop('kars_kodlar', None)
     # 2. Ekrana geçici olarak uyarıyı bas
     uyari_kutusu = st.empty()
     uyari_kutusu.warning("🛑 İşlem durduruldu. Hafıza temizlendi, ana ekrana dönülüyor...")
@@ -571,7 +838,9 @@ st.title("🚀 Yiğit'in Borsa Radarı")
 arama_gecmisi_var = 'eslesenler_hafiza' in st.session_state
 
 # Sadece Başlat'a basılmadıysa VE hafızada sonuç yoksa rehberi göster!
-if not baslat and not arama_gecmisi_var:
+if mod_secimi == "Karşılaştırma" and 'kars_kodlar' in st.session_state:
+    karsilastir_goster(st.session_state['kars_kodlar'])
+elif not baslat and not arama_gecmisi_var:
     
     st.info("👋 **Hoş Geldiniz**  \nBu site tamamen amatör ruhla ve bireysel çabayla geliştirilmiştir. Amacım, finansal piyasalara yeni giren veya verileri daha hızlı taramak isteyen kişilere yardımcı olacak ekonomik ve istatistiksel tabanlı bir araç sunmaktır. Kesinlikle **yatırım tavsiye içermez**, arkasındaki algoritma tamamen geçmiş verilere dayalı istatistiki ve ekonomik tabanlıdır.  \nBir hata, öneri veya şikayetiniz olursa sol menüdeki e-posta adresim üzerinden benimle iletişime geçebilirsiniz.")
     st.markdown("<p style='font-size: 14px; margin-top: -10px; margin-bottom: 20px;'>⚠️Yasal yükümlülükler gereği 'Yasal Uyarı ve Çekince Metni'miz sitenin en altında bulunmaktadır.\n\n<a href='#yasal-uyari-hedefi' target='_self'><b>Buraya tıklayarak</b></a> metne ulaşabilirsiniz. Lütfen siteyi kullanmadan önce okuyunuz⚠️</p> \n\n👈Sol menüden tercihlerinizi belirleyip hisse(leri) taramaya başlatabilirsiniz.", unsafe_allow_html=True)
@@ -683,7 +952,7 @@ else:
     
     # EĞER YENİ BİR TARAMA İSTENİYORSA (Sadece butona basıldıysa burası çalışır)
     if baslat:
-        if mod_secimi == "Çoklu Hisse Tarama": taranacak_liste = bist_listesi[baslangic-1:bitis]
+        if mod_secimi == "Çoklu Hisse Tarama": taranacak_liste = aktif_liste[baslangic-1:bitis]
         elif mod_secimi == "İzleme Listesi": taranacak_liste = izleme_listesi
         else: taranacak_liste = [tekli_sembol]
         toplam_hisse = len(taranacak_liste)
@@ -694,24 +963,42 @@ else:
         gecici_bronz_liste = []
         gecici_hatali = []
         nabiz_listesi = []
+        strateji_acc = strateji_acc_olustur()
+
         import time # Çubuğun mobilde donmasını engellemek için
         
+        havuz = veri_havuzu()
+        for _k in [k for k, v in havuz.items() if time.time() - v[0] > 900]:
+            havuz.pop(_k, None)
+        indirilenler = {}
+        yurutucu = ThreadPoolExecutor(max_workers=MAKS_ISCI)
+        try:
+            gorevler = {yurutucu.submit(hisse_verileri_getir, s_, havuz): s_ for s_ in taranacak_liste}
+            for j, g_ in enumerate(as_completed(gorevler)):
+                try: indirilenler[gorevler[g_]] = g_.result()
+                except Exception: indirilenler[gorevler[g_]] = (None, None)
+                durum_metni.text(f"⬇️ Veriler indiriliyor: {j+1}/{toplam_hisse}")
+                ilerleme_cubugu.progress((j + 1) / toplam_hisse)
+        finally:
+            yurutucu.shutdown(wait=False, cancel_futures=True)
+
         for i, sembol in enumerate(taranacak_liste):
-            durum_metni.text(f"⏳ [{i+1}/{toplam_hisse}] Taranıyor: {sembol} ...")
+            durum_metni.text(f"🔍 [{i+1}/{toplam_hisse}] Analiz ediliyor: {sembol} ...")
             ilerleme_cubugu.progress((i + 1) / toplam_hisse)
             time.sleep(0.01) # Arayüze nefes aldırır
             
-            df, temel = hisse_verileri_getir(sembol)
+            df, temel = indirilenler.get(sembol, (None, None))
             if df is None:
                 gecici_hatali.append(sembol)
                 continue
             _s = df.iloc[-1]
             _v25 = df['Volume'].tail(25).mean()
-            nabiz_listesi.append({"Hisse": sembol,
+            nabiz_listesi.append({"Hisse": sembol, "Sektör": sektor_haritasi.get(sembol, ""),
                                   "Günlük %": round(float((_s['Close'] / df['Close'].iloc[-2] - 1) * 100), 2),
                                   "Hacim x": round(float(_s['Volume'] / _v25), 1) if _v25 > 0 else 0.0,
                                   "RSI": round(float(_s.get('RSI_14', 50)), 1),
                                   "EMA200 üstü": bool(_s['Close'] > _s.get('EMA_200', _s['Close']))})
+            strateji_topla(df, strateji_acc)
             
             uyum_puani = 0
             senaryo_adi = ""
@@ -736,7 +1023,7 @@ else:
                     
                     m_p = 10 if mfi_val < 30 else (5 if mfi_val < 45 else 0)
                     a_p = 10 if adx_val > 25 else (5 if adx_val > 20 else 0)
-                    p_p = 10 if (isinstance(pddd, (int, float)) and pddd < 1.5) else (5 if (isinstance(pddd, (int, float)) and pddd < 3) else 0)
+                    p_p = 10 if (isinstance(pddd, (int, float)) and pddd < 1.5 * temel.get('pddd_k', 1.0)) else (5 if (isinstance(pddd, (int, float)) and pddd < 3 * temel.get('pddd_k', 1.0)) else 0)
                     
                     puan = (r_p * rsi_w) + (m_p * mfi_w) + (a_p * adx_w) + (p_p * pddd_w)
                     if temel.get('mevsimsel_pozitif'): puan += 1
@@ -767,7 +1054,7 @@ else:
                 # VWAP Değerini yakalama düzeltmesi
                 vwap_sutun = temel.get('VWAP_Col')
                 vwap_degeri = son.get(vwap_sutun, 'Bilinmiyor') if vwap_sutun else 'Bilinmiyor'
-
+                
                 karne = hisse_karnesi(df, temel, sembol)
                 pdf_bytes = pdf_bellege_uret(
                     df, sembol, temel, son, uyum_puani, ema_etiket, 
@@ -780,7 +1067,7 @@ else:
                                           "mfi": round(float(son.get('MFI_14', 0)), 1), "adx": round(float(son.get('ADX_14', 0)), 1),
                                           "pddd": round(float(pd.to_numeric(temel.get('PD_DD'), errors='coerce')), 2),
                                           "trend": "↑" if kapanis > ema200 else "↓"})
-                gecici_eslesenler[-1].update({"gorunum": f"{karne['ikon']} {karne['genel']}", "karne": karne, "grafik": df[['Close', 'EMA_200']].tail(252)})
+                gecici_eslesenler[-1].update({"gorunum": f"{karne['ikon']} {karne['genel']}", "karne": karne, "grafik": df[['Open', 'High', 'Low', 'Close', 'EMA_200']].tail(252), "temel": temel})
 
             elif mod_secimi == "Çoklu Hisse Tarama" and uyum_puani >= 50:
                 gecici_bronz_liste.append({"sembol": sembol, "uyum": uyum_puani})
@@ -791,6 +1078,7 @@ else:
         st.session_state['bronz_hafiza'] = gecici_bronz_liste
         st.session_state['hatali_hafiza'] = gecici_hatali
         st.session_state['nabiz_hafiza'] = nabiz_listesi
+        st.session_state['strateji_hafiza'] = strateji_tablosu(strateji_acc)
         durum_metni.empty()
         ilerleme_cubugu.empty()
 
@@ -902,19 +1190,31 @@ else:
             with t3:
                 st.markdown("**🔊 Hacim patlaması (son gün / 25 gün ort.)**")
                 st.dataframe(ndf.nlargest(5, 'Hacim x')[['Hisse', 'Hacim x']], hide_index=True, use_container_width=True)
+            if (ndf['Sektör'] != '').any():
+                st.markdown("**🏭 Sektör görünümü**")
+                sk = ndf[ndf['Sektör'] != ''].groupby('Sektör').agg(Hisse=('Hisse', 'count'), Gunluk=('Günlük %', 'mean'), Ema=('EMA200 üstü', 'mean'), Rsi=('RSI', 'mean')).reset_index()
+                sk['Gunluk'] = sk['Gunluk'].round(2); sk['Ema'] = (sk['Ema'] * 100).round(0); sk['Rsi'] = sk['Rsi'].round(1)
+                sk = sk.rename(columns={'Hisse': 'Hisse sayısı', 'Gunluk': 'Ort. günlük %', 'Ema': 'EMA200 üstü %', 'Rsi': 'Ort. RSI'}).sort_values('Ort. günlük %', ascending=False)
+                st.dataframe(sk, hide_index=True, use_container_width=True)
+            strat = st.session_state.get('strateji_hafiza', [])
+            if strat:
+                with st.expander("🧪 Strateji Karnesi: bu senaryolar taranan hisselerde son 3 yılda nasıl çalıştı?"):
+                    st.dataframe(pd.DataFrame(strat), hide_index=True, use_container_width=True)
+                    st.caption("Taranan tüm hisselerin son 3 yıllık verisinde senaryo koşulunun oluştuğu günler (aynı hissede sinyaller arası en az 10 gün) toplanır. 'Piyasa 10g ort.' tüm günlerin ortalamasıdır; 'Fark' sinyalin piyasaya göre avantajıdır. Dikkat: yalnızca bugün listede olan hisseler taranır (batan/çıkan hisseler yok), bu yüzden sonuçlar olduğundan iyi görünebilir. Gelecek için garanti değildir.")
             st.markdown("---")
-        
+
         hatalilar = st.session_state.get('hatali_hafiza', [])
         if hatalilar:
-             with st.expander(f"⚠️ Veri alınamayan hisseler ({len(hatalilar)})", expanded=(len(eslesenler) == 0 and len(hatalilar) <= 5)):
+            with st.expander(f"⚠️ Veri alınamayan hisseler ({len(hatalilar)})", expanded=(len(eslesenler) == 0 and len(hatalilar) <= 5)):
                 st.caption("Yahoo Finance veri vermedi, hisse kodu/uzantısı hatalı veya 200 günden kısa işlem geçmişi var.")
                 st.write(", ".join(hatalilar))
+
         if len(eslesenler) == 0:
             st.warning("⚠️ Eşleşme bulunamadı. Çoklu taramada kriterleri esnetmeyi; tekli/izleme modunda hisse kodunu ve uzantısını (örn. THYAO.IS) kontrol etmeyi deneyin.")
         else:
             st.success(f"🎉 Tarama Tamamlandı! {len(eslesenler)} adet eşleşme bulundu.")
-            
-            tablo_df = pd.DataFrame([{k: v for k, v in h.items() if k not in ("pdf", "karne", "grafik")} for h in eslesenler]).rename(columns={"sembol": "Hisse", "uyum": "Uyum %", "kapanis": "Kapanış", "rsi": "RSI", "mfi": "MFI", "adx": "ADX", "pddd": "PD/DD", "trend": "Trend", "gorunum": "Görünüm"})
+
+            tablo_df = pd.DataFrame([{k: v for k, v in h.items() if k not in ("pdf", "karne", "grafik", "temel")} for h in eslesenler]).rename(columns={"sembol": "Hisse", "uyum": "Uyum %", "kapanis": "Kapanış", "rsi": "RSI", "mfi": "MFI", "adx": "ADX", "pddd": "PD/DD", "trend": "Trend", "gorunum": "Görünüm"})
             tablo_df["Uyum %"] = tablo_df["Uyum %"].round(1)
             st.dataframe(tablo_df, use_container_width=True, hide_index=True)
             st.download_button("📊 Özet Tabloyu CSV İndir", tablo_df.to_csv(index=False).encode("utf-8-sig"), "Borsa_Ozet.csv", "text/csv")
@@ -924,9 +1224,9 @@ else:
                 secili_kod = karneli[0]['sembol'] if len(karneli) == 1 else st.selectbox("🧠 Akıllı karne için hisse seç:", [h['sembol'] for h in karneli])
                 secili = next(h for h in karneli if h['sembol'] == secili_kod)
                 st.markdown(f"### 🧠 {secili_kod} - Akıllı Karne")
-                karne_goster(secili['karne'], secili['grafik'])
+                karne_goster(secili['karne'], secili['grafik'], secili_kod, secili['temel'])
                 st.markdown("---")
-
+            
             if len(eslesenler) > 1:
                 zip_buffer = io.BytesIO()
                 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
@@ -980,25 +1280,3 @@ st.markdown("""
 </div>
 
 """, unsafe_allow_html=True)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
